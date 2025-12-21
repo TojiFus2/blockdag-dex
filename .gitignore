@@ -34,3 +34,8 @@ build/
 
 # logs
 *.log
+
+#
+server/claims_*.json
+scripts/faucet_claims_*.json
+.DS_Store
