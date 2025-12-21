@@ -5,54 +5,71 @@ const { drip } = require("./faucet");
 
 const PORT = Number(process.env.FAUCET_PORT || process.env.PORT || 8787);
 
-// In produzione NON usare più "IS_DEV" per decidere se abilitare CORS.
-// Il browser ti blocca la fetch se mancano gli header.
-function getAllowedOrigin(req) {
-  const origin = req.headers.origin;
+// In produzione (Render) NODE_ENV è "production"
+const IS_DEV = process.env.NODE_ENV !== "production";
 
-  // Se non c'è Origin (es. curl/server-to-server), non serve CORS.
-  if (!origin) return "";
-
-  // Lista da env: "https://blockdag-dex.vercel.app,https://tuo-dominio.com"
+// Allowlist CORS in prod: metti qui i domini Vercel
+// es: "https://blockdag-dex.vercel.app,https://blockdag-ogtxhi3r5-tojifus2s-projects.vercel.app"
+function getAllowedOrigins() {
   const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
-  if (!raw) {
-    // fallback: se non configuri nulla, apri tutto (meno sicuro ma funziona)
-    return "*";
-  }
-
-  const allowed = raw
+  if (!raw) return [];
+  return raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-
-  if (allowed.includes(origin)) return origin;
-
-  // non autorizzato
-  return "";
 }
 
-function corsHeaders(req) {
-  const allowOrigin = getAllowedOrigin(req);
-  if (!allowOrigin) return {};
+function resolveOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return null;
 
-  return {
-    "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
-    "Access-Control-Allow-Headers": "Content-Type",
-    // Se un giorno usi cookie/creds, qui devi fare Allow-Credentials e NON puoi usare "*"
-    // "Access-Control-Allow-Credentials": "true",
-    "Vary": "Origin",
-  };
+  if (IS_DEV) return "*";
+
+  const allowed = getAllowedOrigins();
+  if (allowed.length === 0) return null;
+
+  // match esatto
+  if (allowed.includes(origin)) return origin;
+
+  return null;
 }
 
 function sendJson(req, res, statusCode, obj) {
   const body = JSON.stringify(obj);
+
+  const corsOrigin = resolveOrigin(req);
+  const corsHeaders =
+    corsOrigin
+      ? {
+          "Access-Control-Allow-Origin": corsOrigin,
+          "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Vary": "Origin",
+        }
+      : {};
+
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
-    ...corsHeaders(req),
+    ...corsHeaders,
   });
   res.end(body);
+}
+
+function sendNoContent(req, res) {
+  const corsOrigin = resolveOrigin(req);
+  const corsHeaders =
+    corsOrigin
+      ? {
+          "Access-Control-Allow-Origin": corsOrigin,
+          "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Vary": "Origin",
+        }
+      : {};
+
+  res.writeHead(204, { ...corsHeaders });
+  res.end();
 }
 
 function readJsonBody(req) {
@@ -80,14 +97,11 @@ const server = http.createServer(async (req, res) => {
   try {
     // Preflight CORS
     if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        ...corsHeaders(req),
-      });
-      res.end();
+      sendNoContent(req, res);
       return;
     }
 
-    // Health
+    // Health check
     if (req.method === "GET" && req.url === "/health") {
       sendJson(req, res, 200, { ok: true });
       return;
@@ -112,4 +126,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[faucet] listening on port ${PORT}`);
+  if (!IS_DEV) {
+    const allowed = getAllowedOrigins();
+    console.log(`[faucet] production CORS allowlist: ${allowed.length ? allowed.join(", ") : "(none)"}`);
+  }
 });
