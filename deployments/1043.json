@@ -1,0 +1,11 @@
+{
+  "network": "bdagTestnet",
+  "chainId": 1043,
+  "deployer": "0x52328804e9F1eCFa5d0CCd5a54A32Fcc5B8BAD85",
+  "factory": "0xa06F091b46da5e53D8d8F1D7519150E29d91e291",
+  "router": "0xe29D2A1F36c5D86929BE895A72FBFEED83841a1C",
+  "wrappedNative": "0xC97B4e92fB267bB11b1CD2d475F9E8c16b433289",
+  "wrapped": "0xC97B4e92fB267bB11b1CD2d475F9E8c16b433289",
+  "weth": "0xC97B4e92fB267bB11b1CD2d475F9E8c16b433289",
+  "timestamp": "2025-12-21T09:15:15.501Z"
+}

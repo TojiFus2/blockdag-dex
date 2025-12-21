@@ -1,0 +1,10 @@
+{
+  "network": "bdagTestnet",
+  "chainId": 1043,
+  "deployer": "0x52328804e9F1eCFa5d0CCd5a54A32Fcc5B8BAD85",
+  "mockUSDC": "0xCFB61e3AA4319A280577577d6463536215541fB7",
+  "faucet": "0xE8C6F2b3Abc735f8eDCAf3bb138469863da51362",
+  "dripAmount": "1000000000",
+  "cooldownSeconds": 30,
+  "timestamp": "2025-12-21T09:45:37.438Z"
+}
