@@ -154,6 +154,11 @@ export default function FaucetPage({ account, pendingTx }) {
             Add WUSDC to wallet
           </button>
           {!!watchStatus && <div className={`swapStatus ${watchStatus === "Token added" ? "ok" : "bad"}`}>{watchStatus}</div>}
+
+          <div className="small" style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+            <span>WUSDC contract:</span>
+            <span className="kv">0x947eE27e29A0c95b0Ab4D8F494dC99AC3e8F2BA2</span>
+          </div>
         </div>
       </div>
     </div>
