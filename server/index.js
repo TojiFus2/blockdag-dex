@@ -3,39 +3,61 @@ require("dotenv").config();
 const http = require("http");
 const { drip } = require("./faucet");
 
-// ======================
-// CONFIG
-// ======================
 const PORT = Number(process.env.FAUCET_PORT || process.env.PORT || 8787);
 
-// Dominio consentito per CORS (metti quello di Vercel su Render)
-// Esempio:
-// CORS_ORIGIN=https://blockdag-dex.vercel.app
-const ALLOWED_ORIGIN = process.env.CORS_ORIGIN || "*";
+// In produzione NON usare più "IS_DEV" per decidere se abilitare CORS.
+// Il browser ti blocca la fetch se mancano gli header.
+function getAllowedOrigin(req) {
+  const origin = req.headers.origin;
 
-// ======================
-// UTILS
-// ======================
-function sendJson(res, statusCode, obj) {
+  // Se non c'è Origin (es. curl/server-to-server), non serve CORS.
+  if (!origin) return "";
+
+  // Lista da env: "https://blockdag-dex.vercel.app,https://tuo-dominio.com"
+  const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
+  if (!raw) {
+    // fallback: se non configuri nulla, apri tutto (meno sicuro ma funziona)
+    return "*";
+  }
+
+  const allowed = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (allowed.includes(origin)) return origin;
+
+  // non autorizzato
+  return "";
+}
+
+function corsHeaders(req) {
+  const allowOrigin = getAllowedOrigin(req);
+  if (!allowOrigin) return {};
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+    "Access-Control-Allow-Headers": "Content-Type",
+    // Se un giorno usi cookie/creds, qui devi fare Allow-Credentials e NON puoi usare "*"
+    // "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin",
+  };
+}
+
+function sendJson(req, res, statusCode, obj) {
   const body = JSON.stringify(obj);
-
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
-
-    // ---- CORS (SEMPRE ATTIVO) ----
-    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    ...corsHeaders(req),
   });
-
   res.end(body);
 }
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
-
     req.on("data", (chunk) => {
       data += chunk;
       if (data.length > 1_000_000) {
@@ -43,7 +65,6 @@ function readJsonBody(req) {
         req.destroy();
       }
     });
-
     req.on("end", () => {
       try {
         resolve(data ? JSON.parse(data) : {});
@@ -51,59 +72,44 @@ function readJsonBody(req) {
         reject(new Error("Invalid JSON"));
       }
     });
-
     req.on("error", reject);
   });
 }
 
-// ======================
-// SERVER
-// ======================
 const server = http.createServer(async (req, res) => {
   try {
-    // ---- PREFLIGHT CORS ----
+    // Preflight CORS
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
-        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        ...corsHeaders(req),
       });
       res.end();
       return;
     }
 
-    // ---- HEALTHCHECK ----
+    // Health
     if (req.method === "GET" && req.url === "/health") {
-      sendJson(res, 200, { ok: true });
+      sendJson(req, res, 200, { ok: true });
       return;
     }
 
-    // ---- FAUCET ----
+    // Faucet
     if (req.method === "POST" && req.url === "/api/faucet/drip") {
       const body = await readJsonBody(req);
-
       const wallet = String(body?.wallet || "");
       const amount = body?.amount;
 
       const txHash = await drip({ wallet, amount });
-
-      sendJson(res, 200, {
-        ok: true,
-        txHash,
-      });
+      sendJson(req, res, 200, { ok: true, txHash });
       return;
     }
 
-    // ---- NOT FOUND ----
-    sendJson(res, 404, { ok: false, error: "Not found" });
+    sendJson(req, res, 404, { ok: false, error: "Not found" });
   } catch (e) {
-    sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+    sendJson(req, res, 400, { ok: false, error: e?.message || String(e) });
   }
 });
 
-// ======================
-// START
-// ======================
 server.listen(PORT, () => {
   console.log(`[faucet] listening on port ${PORT}`);
 });
