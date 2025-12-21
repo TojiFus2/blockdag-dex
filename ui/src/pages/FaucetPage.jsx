@@ -41,7 +41,9 @@ export default function FaucetPage({ account, pendingTx }) {
       return;
     }
 
-    const url = import.meta.env.DEV ? "http://localhost:8787/api/faucet/drip" : "/api/faucet/drip";
+    const base = import.meta.env.VITE_FAUCET_URL || (import.meta.env.DEV ? "http://localhost:8787" : "");
+    const url = `${base}/api/faucet/drip`;
+
 
     try {
       setIsRequesting(true);
