@@ -83,7 +83,7 @@ body {
     url("/background_bdagdex.jpg");
   background-repeat: no-repeat, no-repeat, no-repeat, repeat, no-repeat, no-repeat;
   background-size: auto, auto, auto, auto, cover, cover;
-  background-position: center, center, center, center, center, center 48%;
+  background-position: center, center, center, center, center, center 35%;
   background-attachment: fixed, fixed, fixed, fixed, fixed, fixed;
   position: relative;
   isolation: isolate;
