@@ -448,7 +448,9 @@ select {
 }
 
 .swapHeader {
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .swapTabs {
@@ -924,6 +926,8 @@ select {
   display: flex;
   align-items: center;
   gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .settingsWrap {

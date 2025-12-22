@@ -141,7 +141,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
   const [amount, setAmount] = useState("0.001"); // always tokenIn amount
   const [price, setPrice] = useState("0.0");
 
-  const [tradeTab, setTradeTab] = useState("swap"); // swap|limit|buy|sell
+  const [tradeTab, setTradeTab] = useState("swap"); // swap|buy|sell
 
   // Wrapped address from router (WETH/WBDAG)
   const [wrappedAddr, setWrappedAddr] = useState("");
@@ -727,7 +727,6 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
   const primaryDisabled =
     !!pendingTx ||
-    tradeTab === "limit" ||
     !dep ||
     !account ||
     !tokenInAddr ||
@@ -741,10 +740,6 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
   function setTab(next) {
     setTradeTab(next);
-    if (next === "limit") {
-      setOrderType("limit");
-      return;
-    }
     setOrderType("market");
 
     if (!wrappedAddr) return;
@@ -961,33 +956,13 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
         <div className="swapShell">
           <div className="card swapCard">
             <div className="cardHeader swapHeader">
-              <div>
-                <div className="title">Swap</div>
-                <div className="sub" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  {chainId === 1043 && (
-                    <span className="small" style={{ opacity: 0.85 }}>
-                      Testnet
-                    </span>
-                  )}
-                </div>
+              <div className="swapTabs">
+                <button className={`swapTab ${tradeTab === "swap" ? "swapTabActive" : ""}`} onClick={() => setTab("swap")}>
+                  Swap
+                </button>
               </div>
 
               <div className="swapHeaderRight">
-                <div className="swapTabs">
-                  <button className={`swapTab ${tradeTab === "swap" ? "swapTabActive" : ""}`} onClick={() => setTab("swap")}>
-                    Swap
-                  </button>
-                  <button className={`swapTab ${tradeTab === "limit" ? "swapTabActive" : ""}`} onClick={() => setTab("limit")}>
-                    Limit
-                  </button>
-                  <button className={`swapTab ${tradeTab === "buy" ? "swapTabActive" : ""}`} onClick={() => setTab("buy")}>
-                    Buy
-                  </button>
-                  <button className={`swapTab ${tradeTab === "sell" ? "swapTabActive" : ""}`} onClick={() => setTab("sell")}>
-                    Sell
-                  </button>
-                </div>
-
                 {tradeTab === "swap" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <button
@@ -1031,103 +1006,76 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
               </div>
             </div>
 
-            {tradeTab === "limit" ? (
-              <div className="swapLimit">
-                <div className="swapBox">
-                  <div className="swapBoxHead">
-                    <div className="swapBoxTitle">Limit (coming soon)</div>
-                    <div className="swapTokenPill">
-                      {tokenInSymbol} / {tokenOutSymbol}
-                    </div>
-                  </div>
-                  <div className="swapBoxRow">
-                    <div className="swapField">
-                      <div className="small">Amount</div>
-                      <input className="input swapAmountInput" value={amount} disabled onChange={(e) => setAmount(e.target.value)} />
-                    </div>
-                    <div className="swapField">
-                      <div className="small">Limit price</div>
-                      <input className="input swapAmountInput" value={price} disabled onChange={(e) => setPrice(e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="small" style={{ marginTop: 10 }}>
-                    Limit orders require a dedicated order system (off-chain/on-chain).
-                  </div>
+            <>
+              <div className="swapBox">
+                <div className="swapBoxHead">
+                  <div className="swapBoxTitle">Sell</div>
+                  <button
+                    type="button"
+                    className="swapTokenPill swapTokenPillBtn"
+                    onClick={() => openTokenModal("sell")}
+                    aria-label="Select sell token"
+                    aria-disabled={!!pendingTx}
+                    title={pendingTx ? "Transaction pending" : "Select a token"}
+                  >
+                    {tokenInSymbol}
+                  </button>
+                </div>
+                <div className="swapBoxRow">
+                  <input className="input swapAmountInput" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!!pendingTx} />
                 </div>
               </div>
-            ) : (
-              <>
-                <div className="swapBox">
-                  <div className="swapBoxHead">
-                    <div className="swapBoxTitle">Sell</div>
-                    <button
-                      type="button"
-                      className="swapTokenPill swapTokenPillBtn"
-                      onClick={() => openTokenModal("sell")}
-                      aria-label="Select sell token"
-                      aria-disabled={!!pendingTx}
-                      title={pendingTx ? "Transaction pending" : "Select a token"}
-                    >
-                      {tokenInSymbol}
-                    </button>
-                  </div>
-                  <div className="swapBoxRow">
-                    <input className="input swapAmountInput" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!!pendingTx} />
-                  </div>
-                </div>
 
-                <button
-                  className="swapArrow"
-                  onClick={() => {
-                    if (pendingTx) return;
-                    const a = tokenInAddr;
-                    const b = tokenOutAddr;
-                    setTokenInAddr(b);
-                    setTokenOutAddr(a);
-                    setTradeTab("swap");
-                    setOrderType("market");
-                  }}
-                  title="Flip direction"
-                  type="button"
-                  disabled={!!pendingTx}
-                >
-                  {"\u2193"}
-                </button>
+              <button
+                className="swapArrow"
+                onClick={() => {
+                  if (pendingTx) return;
+                  const a = tokenInAddr;
+                  const b = tokenOutAddr;
+                  setTokenInAddr(b);
+                  setTokenOutAddr(a);
+                  setTradeTab("swap");
+                  setOrderType("market");
+                }}
+                title="Flip direction"
+                type="button"
+                disabled={!!pendingTx}
+              >
+                {"\u2193"}
+              </button>
 
-                <div className="swapBox">
-                  <div className="swapBoxHead">
-                    <div className="swapBoxTitle">Buy</div>
-                    <button
-                      type="button"
-                      className="swapTokenPill swapTokenPillBtn"
-                      onClick={() => openTokenModal("buy")}
-                      aria-label="Select buy token"
-                      aria-disabled={!!pendingTx}
-                      title={pendingTx ? "Transaction pending" : "Select a token"}
-                    >
-                      {tokenOutSymbol}
-                    </button>
-                  </div>
-                  <div className="swapBoxRow">
-                    <div className="swapQuote">{quoteText}</div>
-                  </div>
-                  {!!inlineWarning && (
-                    <div className="small bad" style={{ marginTop: 8 }}>
-                      {inlineWarning}
-                    </div>
-                  )}
-                  <div className="swapMeta small">
-                    MinOut ({(clampBps(slippageBps) / 100).toFixed(2)}%): <b>{minOutText}</b>
-                  </div>
+              <div className="swapBox">
+                <div className="swapBoxHead">
+                  <div className="swapBoxTitle">Buy</div>
+                  <button
+                    type="button"
+                    className="swapTokenPill swapTokenPillBtn"
+                    onClick={() => openTokenModal("buy")}
+                    aria-label="Select buy token"
+                    aria-disabled={!!pendingTx}
+                    title={pendingTx ? "Transaction pending" : "Select a token"}
+                  >
+                    {tokenOutSymbol}
+                  </button>
                 </div>
-              </>
-            )}
+                <div className="swapBoxRow">
+                  <div className="swapQuote">{quoteText}</div>
+                </div>
+                {!!inlineWarning && (
+                  <div className="small bad" style={{ marginTop: 8 }}>
+                    {inlineWarning}
+                  </div>
+                )}
+                <div className="swapMeta small">
+                  MinOut ({(clampBps(slippageBps) / 100).toFixed(2)}%): <b>{minOutText}</b>
+                </div>
+              </div>
+            </>
 
             <button
               className="btn swapCta"
               disabled={primaryDisabled}
               onClick={() => {
-                if (tradeTab === "limit") return;
                 return placeMarket();
               }}
             >
@@ -1143,7 +1091,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                 <div className="kv">{quote ? quoteText : "—"}</div>
               </div>
               <div className="detailsRow">
-                <div className="small">Slippage</div>
+                <div className="small">Slippage limit</div>
                 <div className="kv">{(slippageBps / 100).toFixed(2)}%</div>
               </div>
               <div className="detailsRow">
