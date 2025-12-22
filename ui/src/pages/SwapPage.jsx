@@ -74,6 +74,19 @@ function eip1193Code(e) {
   return e?.code ?? e?.data?.originalError?.code ?? e?.error?.code ?? null;
 }
 
+function compactDecStr(s, maxDecimals = 4) {
+  if (!s) return "";
+  const raw = String(s).trim();
+  if (!raw) return "";
+
+  const [intPartRaw, fracRaw = ""] = raw.split(".");
+  const intPart = (intPartRaw || "0").replace(/^0+(?=\\d)/, "") || "0";
+  if (intPart.length > 8) return `${intPart.slice(0, 8)}…`;
+
+  const frac = fracRaw.slice(0, maxDecimals).replace(/0+$/, "");
+  return frac ? `${intPart}.${frac}` : intPart;
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -570,6 +583,63 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTokenModalOpen, account, modalTokens, wrappedAddr]);
 
+  // Selected token balances (best-effort)
+  useEffect(() => {
+    if (!account) return;
+    if (!tokenInAddr && !tokenOutAddr) return;
+
+    let canceled = false;
+
+    (async () => {
+      try {
+        const provider = await getBrowserProvider();
+
+        let nativeBal = null;
+        try {
+          nativeBal = await retryView(() => provider.getBalance(account));
+        } catch {}
+
+        const items = [
+          { addr: tokenInAddr, meta: tokenInMeta },
+          { addr: tokenOutAddr, meta: tokenOutMeta },
+        ].filter((x) => !!x.addr);
+
+        const out = {};
+
+        for (const it of items) {
+          const addr = String(it.addr || "");
+          const lower = addr.toLowerCase();
+          const meta = it.meta;
+
+          try {
+            let raw;
+            if (meta?.isNative) raw = nativeBal ?? 0n;
+            else {
+              const c = new ethers.Contract(addr, ERC20_ABI, provider);
+              raw = await retryView(() => c.balanceOf(account));
+            }
+
+            const dec = Number(meta?.decimals ?? 18);
+            out[lower] = ethers.formatUnits(raw, dec);
+          } catch {
+            out[lower] = "";
+          }
+        }
+
+        if (!canceled) {
+          setBalancesByAddr((prev) => ({ ...prev, ...out }));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, tokenInAddr, tokenOutAddr, tokenInMeta, tokenOutMeta, wrappedAddr]);
+
   // Pool missing logic: uses resolved on-chain addresses
   const poolMissing = useMemo(() => {
     if (!tokenInAddr || !tokenOutAddr) return false;
@@ -946,6 +1016,18 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
   const tokenInSymbol = tokenInMeta?.symbol || "\u2014";
   const tokenOutSymbol = tokenOutMeta?.symbol || "\u2014";
 
+  const tokenInBalShort = useMemo(() => {
+    if (!account || !tokenInAddr) return "";
+    const s = balancesByAddr[String(tokenInAddr).toLowerCase()] || "";
+    return compactDecStr(s, 4);
+  }, [account, tokenInAddr, balancesByAddr]);
+
+  const tokenOutBalShort = useMemo(() => {
+    if (!account || !tokenOutAddr) return "";
+    const s = balancesByAddr[String(tokenOutAddr).toLowerCase()] || "";
+    return compactDecStr(s, 4);
+  }, [account, tokenOutAddr, balancesByAddr]);
+
   // Debug: resolved on-chain tokens
   const resolvedA = useMemo(() => resolveOnchainAddr(tokenInAddr), [tokenInAddr, wrappedAddr, tokenMetaByAddr]);
   const resolvedB = useMemo(() => resolveOnchainAddr(tokenOutAddr), [tokenOutAddr, wrappedAddr, tokenMetaByAddr]);
@@ -1010,16 +1092,19 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
               <div className="swapBox">
                 <div className="swapBoxHead">
                   <div className="swapBoxTitle">Sell</div>
-                  <button
-                    type="button"
-                    className="swapTokenPill swapTokenPillBtn"
-                    onClick={() => openTokenModal("sell")}
-                    aria-label="Select sell token"
-                    aria-disabled={!!pendingTx}
-                    title={pendingTx ? "Transaction pending" : "Select a token"}
-                  >
-                    {tokenInSymbol}
-                  </button>
+                  <div className="swapTokenPick">
+                    {!!tokenInBalShort && <span className="swapTokenBalOutside">{tokenInBalShort}</span>}
+                    <button
+                      type="button"
+                      className="swapTokenPill swapTokenPillBtn"
+                      onClick={() => openTokenModal("sell")}
+                      aria-label="Select sell token"
+                      aria-disabled={!!pendingTx}
+                      title={pendingTx ? "Transaction pending" : "Select a token"}
+                    >
+                      {tokenInSymbol}
+                    </button>
+                  </div>
                 </div>
                 <div className="swapBoxRow">
                   <input className="input swapAmountInput" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!!pendingTx} />
@@ -1047,16 +1132,19 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
               <div className="swapBox">
                 <div className="swapBoxHead">
                   <div className="swapBoxTitle">Buy</div>
-                  <button
-                    type="button"
-                    className="swapTokenPill swapTokenPillBtn"
-                    onClick={() => openTokenModal("buy")}
-                    aria-label="Select buy token"
-                    aria-disabled={!!pendingTx}
-                    title={pendingTx ? "Transaction pending" : "Select a token"}
-                  >
-                    {tokenOutSymbol}
-                  </button>
+                  <div className="swapTokenPick">
+                    {!!tokenOutBalShort && <span className="swapTokenBalOutside">{tokenOutBalShort}</span>}
+                    <button
+                      type="button"
+                      className="swapTokenPill swapTokenPillBtn"
+                      onClick={() => openTokenModal("buy")}
+                      aria-label="Select buy token"
+                      aria-disabled={!!pendingTx}
+                      title={pendingTx ? "Transaction pending" : "Select a token"}
+                    >
+                      {tokenOutSymbol}
+                    </button>
+                  </div>
                 </div>
                 <div className="swapBoxRow">
                   <div className="swapQuote">{quoteText}</div>

@@ -90,7 +90,7 @@ export default function App() {
           <div className="brand">
             <img src={logo} alt="logo" />
             <div className="brandTitle">
-              <b>BlockDAG (Testnet)</b>
+              <b>BlockDAGswap (Testnet)</b>
             </div>
           </div>
 
