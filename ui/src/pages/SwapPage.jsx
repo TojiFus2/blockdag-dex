@@ -50,7 +50,6 @@ function getAmountOut(amountIn, reserveIn, reserveOut) {
   return numerator / denominator;
 }
 
-
 function clampBps(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return 50;
@@ -69,6 +68,10 @@ function sameAddr(a, b) {
 
 function toErr(e) {
   return e?.shortMessage || e?.reason || e?.message || String(e);
+}
+
+function eip1193Code(e) {
+  return e?.code ?? e?.data?.originalError?.code ?? e?.error?.code ?? null;
 }
 
 function sleep(ms) {
@@ -126,6 +129,12 @@ async function loadPairsInfo(provider, pairs) {
 export default function SwapPage({ account, chainId, dep, pendingTx, setPendingTx }) {
   const [status, setStatus] = useState("Idle");
   const [error, setError] = useState("");
+  const [netStatus, setNetStatus] = useState("");
+  const [isNetBusy, setIsNetBusy] = useState(false);
+
+  // Persistent confirmation near Swap button
+  const [confirm, setConfirm] = useState(null);
+  // confirm = { type: 'success'|'fail', title: string, txHash?: string, details?: string }
 
   const [orderType, setOrderType] = useState("market"); // market|limit
   const [amount, setAmount] = useState("0.001"); // always tokenIn amount
@@ -243,11 +252,14 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
   const sameTokenSelected = useMemo(() => {
     if (!tokenInAddr || !tokenOutAddr) return false;
-
-    // Consider native as "equivalent" to wrapped ONLY for on-chain resolution,
-    // but for UI selection we still want two distinct selections.
     return sameAddr(tokenInAddr, tokenOutAddr);
   }, [tokenInAddr, tokenOutAddr]);
+
+  // Reset confirmation when user changes inputs/tokens (so it doesn't stick forever)
+  useEffect(() => {
+    if (confirm) setConfirm(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenInAddr, tokenOutAddr, amount, tradeTab]);
 
   function closeTokenModal() {
     setIsTokenModalOpen(false);
@@ -332,9 +344,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
         const provider = await getBrowserProvider();
         const factory = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
 
-        const tokens = [
-          { symbol: "WETH", name: "Wrapped Native", address: wrappedAddr, decimals: 18, isWrapped: true, isNative: false },
-        ];
+        const tokens = [{ symbol: "WETH", name: "Wrapped Native", address: wrappedAddr, decimals: 18, isWrapped: true, isNative: false }];
 
         try {
           const nPairs = await retryView(() => factory.allPairsLength());
@@ -528,15 +538,13 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
           const addr = String(t.address || "");
           const lower = addr.toLowerCase();
 
-          // Decide native vs ERC20 by token meta:
           const meta = getTokenMeta(addr);
           const isNative = !!meta?.isNative;
 
           try {
             let raw;
-            if (isNative) {
-              raw = nativeBal ?? 0n;
-            } else {
+            if (isNative) raw = nativeBal ?? 0n;
+            else {
               const c = new ethers.Contract(addr, ERC20_ABI, provider);
               raw = await retryView(() => c.balanceOf(account));
             }
@@ -589,7 +597,6 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
     let amountInRaw = 0n;
     try {
-      // For native BDAG, decimals=18 and amount refers to native input.
       amountInRaw = ethers.parseUnits(amount || "0", Number(tokenInMeta.decimals ?? 18));
     } catch {
       amountInRaw = 0n;
@@ -607,12 +614,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     if (outRaw <= 0n) return null;
     const minOutRaw = (outRaw * (10000n - BigInt(clampBps(slippageBps)))) / 10000n;
 
-    return {
-      amountInRaw,
-      outRaw,
-      minOutRaw,
-      pathResolved: [a, b],
-    };
+    return { amountInRaw, outRaw, minOutRaw, pathResolved: [a, b] };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderType, pairAddr, pairInfo, tokenInMeta, tokenOutMeta, amount, slippageBps, tokenInAddr, tokenOutAddr, wrappedAddr]);
 
@@ -642,7 +644,6 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     if (!tokenInAddr || !tokenOutAddr) return "";
     if (sameTokenSelected) return "Select two different tokens";
 
-    // Native+Wrapped selection resolves to same token -> invalid for swaps
     const a = resolveOnchainAddr(tokenInAddr);
     const b = resolveOnchainAddr(tokenOutAddr);
     if (wrappedAddr && a && b && sameAddr(a, b)) return "Invalid route (native and wrapped are equivalent)";
@@ -677,8 +678,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
     if (!wrappedAddr) return;
     const other =
-      tokenList.find((t) => !t.isWrapped && !sameAddr(t.address, wrappedAddr)) ||
-      TOKENS_1043.find((t) => !t.isWrapped);
+      tokenList.find((t) => !t.isWrapped && !sameAddr(t.address, wrappedAddr)) || TOKENS_1043.find((t) => !t.isWrapped);
 
     if (next === "buy") {
       setTokenInAddr(wrappedAddr);
@@ -690,6 +690,70 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     }
   }
 
+  async function addOrSwitchBlockdagNetwork() {
+    if (isNetBusy) return;
+
+    const eth = window?.ethereum;
+    if (!eth?.request) {
+      setNetStatus("No wallet detected");
+      return;
+    }
+
+    const chainIdHex = "0x413"; // 1043
+
+    try {
+      setIsNetBusy(true);
+      setNetStatus("Switching...");
+
+      try {
+        await eth.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: chainIdHex }],
+        });
+        setNetStatus("Switched");
+        return;
+      } catch (e) {
+        const code = eip1193Code(e);
+        if (code === 4001) {
+          setNetStatus("User rejected");
+          return;
+        }
+        if (code !== 4902) throw e;
+      }
+
+      const rpcUrl = String(import.meta.env.VITE_RPC_URL || "").trim();
+      if (!rpcUrl) {
+        setNetStatus("Missing VITE_RPC_URL");
+        return;
+      }
+
+      await eth.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: chainIdHex,
+            chainName: "BlockDAG Testnet",
+            nativeCurrency: { name: "BlockDAG", symbol: "BDAG", decimals: 18 },
+            rpcUrls: [rpcUrl],
+          },
+        ],
+      });
+
+      await eth.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: chainIdHex }],
+      });
+
+      setNetStatus("Switched");
+    } catch (e) {
+      const code = eip1193Code(e);
+      if (code === 4001) setNetStatus("User rejected");
+      else setNetStatus(toErr(e));
+    } finally {
+      setIsNetBusy(false);
+    }
+  }
+
   async function placeMarket() {
     if (pendingTx) return;
 
@@ -698,12 +762,14 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     if (!wrappedAddr) return setError("Wrapped token not loaded");
     if (sameTokenSelected) return setError("Select two different tokens");
 
+    setError("");
+    setConfirm(null);
+
     const inMeta = tokenInMeta;
     const outMeta = tokenOutMeta;
     const isInNative = !!inMeta?.isNative;
     const isOutNative = !!outMeta?.isNative;
 
-    // Prevent nonsense routes like BDAG <-> WBDAG (same underlying)
     const a = resolveOnchainAddr(tokenInAddr);
     const b = resolveOnchainAddr(tokenOutAddr);
     if (!a || !b || sameAddr(a, b)) return setError("Invalid route");
@@ -713,7 +779,6 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     if (!quote || quote.amountInRaw <= 0n) return setError("Invalid amount");
 
     try {
-      setError("");
       setStatus("Preparing tx...");
 
       const provider = await getBrowserProvider();
@@ -723,23 +788,18 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMinutes);
       const path = quote.pathResolved;
 
-      // Sanity: ETH-for-tokens must start with wrapped; tokens-for-ETH must end with wrapped.
       if (isInNative && !sameAddr(path[0], wrappedAddr)) return setError("Bad path (expected wrapped in)");
       if (isOutNative && !sameAddr(path[path.length - 1], wrappedAddr)) return setError("Bad path (expected wrapped out)");
 
+      let tx;
+
       if (isInNative) {
-        // BDAG(native) -> token : swapExactETHForTokens, router wraps to WBDAG internally
         setStatus("Sending swapExactETHForTokens...");
-        const tx = await router.swapExactETHForTokens(quote.minOutRaw, path, account, deadline, {
+        tx = await router.swapExactETHForTokens(quote.minOutRaw, path, account, deadline, {
           value: quote.amountInRaw,
           gasLimit: GAS.SWAP,
         });
-        setPendingTx(tx.hash);
-        setStatus(`Pending: ${tx.hash}`);
-        await tx.wait();
-        setStatus("Swap OK");
       } else if (isOutNative) {
-        // token -> BDAG(native) : swapExactTokensForETH, router unwraps from WBDAG at end
         const tokenIn = new ethers.Contract(tokenInAddr, ERC20_ABI, signer);
 
         setStatus("Checking allowance...");
@@ -754,15 +814,10 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
         }
 
         setStatus("Sending swapExactTokensForETH...");
-        const tx = await router.swapExactTokensForETH(quote.amountInRaw, quote.minOutRaw, path, account, deadline, {
+        tx = await router.swapExactTokensForETH(quote.amountInRaw, quote.minOutRaw, path, account, deadline, {
           gasLimit: GAS.SWAP,
         });
-        setPendingTx(tx.hash);
-        setStatus(`Pending: ${tx.hash}`);
-        await tx.wait();
-        setStatus("Swap OK");
       } else {
-        // token -> token : swapExactTokensForTokens
         const tokenIn = new ethers.Contract(tokenInAddr, ERC20_ABI, signer);
 
         setStatus("Checking allowance...");
@@ -777,21 +832,46 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
         }
 
         setStatus("Sending swapExactTokensForTokens...");
-        const tx = await router.swapExactTokensForTokens(quote.amountInRaw, quote.minOutRaw, path, account, deadline, {
+        tx = await router.swapExactTokensForTokens(quote.amountInRaw, quote.minOutRaw, path, account, deadline, {
           gasLimit: GAS.SWAP,
         });
-        setPendingTx(tx.hash);
-        setStatus(`Pending: ${tx.hash}`);
-        await tx.wait();
-        setStatus("Swap OK");
       }
+
+      setPendingTx(tx.hash);
+      setStatus(`Pending: ${tx.hash}`);
+
+      const rc = await tx.wait();
 
       setPendingTx("");
       setRouteRefreshNonce((n) => n + 1);
+
+      if (rc?.status === 1) {
+        setConfirm({
+          type: "success",
+          title: "Swap success ✅",
+          txHash: tx.hash,
+          details: "Transaction confirmed on-chain.",
+        });
+      } else {
+        setConfirm({
+          type: "fail",
+          title: "Swap failed ❌",
+          txHash: tx.hash,
+          details: "Transaction was mined but failed.",
+        });
+      }
+
+      setStatus("Ready");
     } catch (e) {
       console.error(e);
-      setError(toErr(e));
-      setStatus("Idle");
+      const msg = toErr(e);
+      setError(msg);
+      setConfirm({
+        type: "fail",
+        title: "Swap failed ❌",
+        details: msg,
+      });
+      setStatus("Ready");
       setPendingTx("");
       setRouteRefreshNonce((n) => n + 1);
     }
@@ -815,7 +895,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                 <div className="sub" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   {chainId === 1043 && (
                     <span className="small" style={{ opacity: 0.85 }}>
-                      Testnet mode: forced gas
+                      Testnet
                     </span>
                   )}
                 </div>
@@ -836,6 +916,30 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                     Sell
                   </button>
                 </div>
+
+                {tradeTab === "swap" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="swapTokenPill swapTokenPillBtn"
+                      disabled={chainId === 1043 || isNetBusy}
+                      onClick={() => {
+                        if (chainId === 1043) return;
+                        setNetStatus("");
+                        addOrSwitchBlockdagNetwork();
+                      }}
+                      aria-label={chainId === 1043 ? "BlockDAG active" : "Add BlockDAG Network"}
+                      title={chainId === 1043 ? "BlockDAG active" : "Add BlockDAG Network"}
+                    >
+                      {chainId === 1043 ? "BlockDAG active" : "Add BlockDAG Network"}
+                    </button>
+                    {!!netStatus && (
+                      <span className="small" style={{ opacity: 0.85, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {netStatus}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="settingsWrap" ref={settingsRef}>
                   <button
@@ -959,6 +1063,30 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
               {primaryText}
             </button>
 
+            {/* NOW: confirmation is right under the Swap button */}
+            {confirm && (
+              <div
+                className={`swapStatus ${confirm.type === "success" ? "ok" : "bad"}`}
+                style={{ marginTop: 10, cursor: confirm.txHash ? "pointer" : "default" }}
+                onClick={() => {
+                  if (!confirm?.txHash) return;
+                  try {
+                    navigator.clipboard.writeText(confirm.txHash);
+                    setConfirm((c) => (c ? { ...c, details: "Tx hash copied." } : c));
+                  } catch {}
+                }}
+                title={confirm.txHash ? "Click to copy tx hash" : ""}
+              >
+                <div style={{ fontWeight: 700 }}>{confirm.title}</div>
+                {confirm.txHash && <div className="small">Tx: {confirm.txHash}</div>}
+                {confirm.details && (
+                  <div className="small" style={{ opacity: 0.92, marginTop: 4 }}>
+                    {confirm.details}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className={`swapStatus ${error ? "bad" : "ok"}`}>{error ? error : status}</div>
 
             <button
@@ -976,59 +1104,59 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
             {debugOpen && (
               <div className="detailsPanel">
-                  <div className="detailsRow">
-                    <div className="small">chainId</div>
+                <div className="detailsRow">
+                  <div className="small">chainId</div>
                   <div className="kv">{chainId ?? "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">factory</div>
+                <div className="detailsRow">
+                  <div className="small">factory</div>
                   <div className="kv">{routerFactoryAddr || dep?.factory || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">router</div>
+                <div className="detailsRow">
+                  <div className="small">router</div>
                   <div className="kv">{dep?.router || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">wrapped</div>
+                <div className="detailsRow">
+                  <div className="small">wrapped</div>
                   <div className="kv">{wrappedAddr || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">tokenIn</div>
-                    <div className="kv">
+                <div className="detailsRow">
+                  <div className="small">tokenIn</div>
+                  <div className="kv">
                     {tokenInAddr || "\u2014"} {tokenInMeta?.isNative ? "(native)" : ""}
-                    </div>
                   </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">tokenOut</div>
-                    <div className="kv">
+                <div className="detailsRow">
+                  <div className="small">tokenOut</div>
+                  <div className="kv">
                     {tokenOutAddr || "\u2014"} {tokenOutMeta?.isNative ? "(native)" : ""}
-                    </div>
                   </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">resolvedIn</div>
+                <div className="detailsRow">
+                  <div className="small">resolvedIn</div>
                   <div className="kv">{resolvedA || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">resolvedOut</div>
+                <div className="detailsRow">
+                  <div className="small">resolvedOut</div>
                   <div className="kv">{resolvedB || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">pair</div>
+                <div className="detailsRow">
+                  <div className="small">pair</div>
                   <div className="kv">{pairAddr || "\u2014"}</div>
-                  </div>
+                </div>
 
                 <div className="detailsRow">
                   <div className="small">pool</div>
-                    <div className="kv">
-                      {!tokenInAddr || !tokenOutAddr
+                  <div className="kv">
+                    {!tokenInAddr || !tokenOutAddr
                       ? "\u2014"
                       : sameTokenSelected
                       ? "Select two different tokens"
@@ -1040,37 +1168,37 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                   </div>
                 </div>
 
-                  <div className="detailsRow">
-                    <div className="small">pairError</div>
+                <div className="detailsRow">
+                  <div className="small">pairError</div>
                   <div className="kv">{pairLoadError || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">token0</div>
+                <div className="detailsRow">
+                  <div className="small">token0</div>
                   <div className="kv">{pairInfo?.token0?.addr || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">token1</div>
+                <div className="detailsRow">
+                  <div className="small">token1</div>
                   <div className="kv">{pairInfo?.token1?.addr || "\u2014"}</div>
-                  </div>
+                </div>
 
-                  <div className="detailsRow">
-                    <div className="small">reserves</div>
-                    <div className="kv">
+                <div className="detailsRow">
+                  <div className="small">reserves</div>
+                  <div className="kv">
                     {pairInfo?.reserves ? `${pairInfo.reserves.r0.toString()} / ${pairInfo.reserves.r1.toString()}` : "\u2014"}
-                    </div>
                   </div>
+                </div>
 
                 <div className="detailsRow">
                   <div className="small">slippageBps</div>
                   <div className="kv">{clampBps(slippageBps)}</div>
                 </div>
 
-                  <div className="detailsRow">
-                    <div className="small">lastError</div>
+                <div className="detailsRow">
+                  <div className="small">lastError</div>
                   <div className="kv">{error || "\u2014"}</div>
-                  </div>
+                </div>
               </div>
             )}
           </div>

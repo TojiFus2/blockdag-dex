@@ -178,11 +178,14 @@ select {
 }
 
 .navLinks {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   gap: 18px;
   align-items: center;
-  justify-content: flex-end;
-  flex: 1;
+  justify-content: center;
 }
 .navLinks a {
   font-size: 13px;

@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 
+const WUSDC = {
+  address: "0xd7eFc4e37306b379C88DBf8749189C480bfEA340",
+  symbol: "USDC",
+  decimals: 6,
+};
+
 function toErr(e) {
   return e?.shortMessage || e?.reason || e?.message || String(e);
 }
@@ -11,6 +17,32 @@ function clampAmount(x) {
   return Math.max(1, Math.min(100, Math.floor(n)));
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function tryWatchAsset(eth, options, retries = 2) {
+  let lastErr = null;
+
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const ok = await eth.request({
+        method: "wallet_watchAsset",
+        params: { type: "ERC20", options },
+      });
+      return { ok: ok === true, err: null };
+    } catch (e) {
+      lastErr = e;
+      // user rejected
+      if (e?.code === 4001) return { ok: false, err: e, rejected: true };
+      // wait a bit and retry (provider flakiness / focus issues)
+      if (i < retries) await sleep(350);
+    }
+  }
+
+  return { ok: false, err: lastErr };
+}
+
 export default function FaucetPage({ account, pendingTx }) {
   const [wallet, setWallet] = useState("");
   const [amount, setAmount] = useState("100");
@@ -18,7 +50,9 @@ export default function FaucetPage({ account, pendingTx }) {
   const [error, setError] = useState("");
   const [txHash, setTxHash] = useState("");
   const [isRequesting, setIsRequesting] = useState(false);
+
   const [watchStatus, setWatchStatus] = useState("");
+  const [watchDetails, setWatchDetails] = useState("");
 
   useEffect(() => {
     if (!account) return;
@@ -35,6 +69,7 @@ export default function FaucetPage({ account, pendingTx }) {
     setError("");
     setTxHash("");
     setWatchStatus("");
+    setWatchDetails("");
 
     if (!ethers.isAddress(wallet || "")) {
       setError("Invalid wallet");
@@ -44,15 +79,16 @@ export default function FaucetPage({ account, pendingTx }) {
     const base = import.meta.env.VITE_FAUCET_URL || (import.meta.env.DEV ? "http://localhost:8787" : "");
     const url = `${base}/api/faucet/drip`;
 
-
     try {
       setIsRequesting(true);
       setStatus("Requesting faucet...");
+
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ wallet, amount: amountClamped }),
       });
+
       const json = await res.json().catch(() => ({}));
 
       if (!res.ok || !json?.ok) {
@@ -60,7 +96,7 @@ export default function FaucetPage({ account, pendingTx }) {
       }
 
       setTxHash(json.txHash || "");
-      setStatus("WUSDC sent");
+      setStatus(`${WUSDC.symbol} sent`);
     } catch (e) {
       setError(toErr(e));
       setStatus("Idle");
@@ -71,30 +107,49 @@ export default function FaucetPage({ account, pendingTx }) {
 
   async function addWusdcToWallet() {
     setWatchStatus("");
+    setWatchDetails("");
+
     const eth = window?.ethereum;
     if (!eth?.request) {
       setWatchStatus("No wallet detected");
       return;
     }
 
-    try {
-      const ok = await eth.request({
-        method: "wallet_watchAsset",
-        params: {
-          type: "ERC20",
-          options: {
-            address: "0x947eE27e29A0c95b0Ab4D8F494dC99AC3e8F2BA2",
-            symbol: "WUSDC",
-            decimals: 6,
-          },
-        },
-      });
+    // some wallets simply don't support it: detect early
+    if (!eth?.isMetaMask && !eth?.request) {
+      setWatchStatus("Wallet may not support watchAsset");
+      return;
+    }
 
-      if (ok === true) setWatchStatus("Token added");
-      else setWatchStatus("User rejected");
-    } catch (e) {
-      if (e?.code === 4001) setWatchStatus("User rejected");
-      else setWatchStatus("Failed to add token");
+    const { ok, err, rejected } = await tryWatchAsset(eth, {
+      address: WUSDC.address,
+      symbol: WUSDC.symbol,
+      decimals: WUSDC.decimals,
+    });
+
+    if (ok) {
+      setWatchStatus("Token added");
+      return;
+    }
+
+    if (rejected) {
+      setWatchStatus("User rejected");
+      return;
+    }
+
+    // show real error details so we can understand which wallet limitation it is
+    const msg = err ? toErr(err) : "Unknown error";
+    setWatchStatus("Failed to add token");
+    setWatchDetails(msg);
+  }
+
+  function copyContract() {
+    try {
+      navigator.clipboard.writeText(WUSDC.address);
+      setWatchStatus("Copied contract address");
+      setWatchDetails("");
+    } catch {
+      setWatchStatus("Copy failed");
     }
   }
 
@@ -105,7 +160,7 @@ export default function FaucetPage({ account, pendingTx }) {
           <div className="cardHeader swapHeader">
             <div>
               <div className="title">Faucet</div>
-              <div className="sub">WUSDC (max 100 / 24h)</div>
+              <div className="sub">W{WUSDC.symbol} (max 100 / 24h)</div>
             </div>
           </div>
 
@@ -128,7 +183,7 @@ export default function FaucetPage({ account, pendingTx }) {
           <div className="swapBox" style={{ marginTop: 12 }}>
             <div className="swapBoxHead">
               <div className="swapBoxTitle">Amount</div>
-              <div className="swapTokenPill">WUSDC</div>
+              <div className="swapTokenPill">W{WUSDC.symbol}</div>
             </div>
             <div className="swapBoxRow">
               <input
@@ -143,7 +198,7 @@ export default function FaucetPage({ account, pendingTx }) {
           </div>
 
           <button className="btn swapCta" disabled={disabled} onClick={drip}>
-            {pendingTx ? "Pending transaction..." : isRequesting ? status : "Get WUSDC (100/day)"}
+            {pendingTx ? "Pending transaction..." : isRequesting ? status : `Get W${WUSDC.symbol} (100/day)`}
           </button>
 
           <div className={`swapStatus ${error ? "bad" : "ok"}`}>{error ? error : txHash ? `Tx: ${txHash}` : status}</div>
@@ -151,13 +206,30 @@ export default function FaucetPage({ account, pendingTx }) {
 
         <div style={{ marginTop: 12 }}>
           <button className="btn swapCta" type="button" disabled={!!pendingTx} onClick={addWusdcToWallet}>
-            Add WUSDC to wallet
+            Add W{WUSDC.symbol} to wallet
           </button>
-          {!!watchStatus && <div className={`swapStatus ${watchStatus === "Token added" ? "ok" : "bad"}`}>{watchStatus}</div>}
+
+          {!!watchStatus && (
+            <div className={`swapStatus ${watchStatus === "Token added" || watchStatus === "Copied contract address" ? "ok" : "bad"}`}>
+              {watchStatus}
+              {!!watchDetails && (
+                <div className="small" style={{ opacity: 0.9, marginTop: 6, wordBreak: "break-word" }}>
+                  {watchDetails}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="small" style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span>WUSDC contract:</span>
-            <span className="kv">0x947eE27e29A0c95b0Ab4D8F494dC99AC3e8F2BA2</span>
+            <span>W{WUSDC.symbol} contract:</span>
+            <span className="kv">{WUSDC.address}</span>
+            <button type="button" className="btn" style={{ padding: "6px 10px", borderRadius: 10 }} onClick={copyContract}>
+              Copy
+            </button>
+          </div>
+
+          <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+            If the wallet doesn’t support “Add token”, import manually using the contract above (decimals: {WUSDC.decimals}).
           </div>
         </div>
       </div>

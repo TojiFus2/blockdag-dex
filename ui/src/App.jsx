@@ -29,6 +29,15 @@ export default function App() {
 
   const walletOk = hasInjected();
 
+  function disconnect() {
+    setError("");
+    setStatus("Idle");
+    setAccount("");
+    setChainId(null);
+    setDep(null);
+    setPendingTx("");
+  }
+
   async function connect() {
     setError("");
     setStatus("Connecting wallet...");
@@ -82,7 +91,6 @@ export default function App() {
             <img src={logo} alt="logo" />
             <div className="brandTitle">
               <b>BlockDAG</b>
-              <span>{chainId === 1043 ? "Testnet DEX" : "Local DEX"} ({chainId ?? "\u2014"})</span>
             </div>
           </div>
 
@@ -94,8 +102,15 @@ export default function App() {
 
           <div className="navRight">
             <div className="pill">{account ? `Wallet: ${shortAddr(account)}` : "Wallet: not connected"}</div>
-            <button className="btn btnConnect" onClick={connect} disabled={!walletOk || !!pendingTx}>
-              Connect
+            <button
+              className="btn btnConnect"
+              onClick={() => {
+                if (account) disconnect();
+                else connect();
+              }}
+              disabled={!walletOk || !!pendingTx}
+            >
+              {account ? "Logout" : "Connect"}
             </button>
           </div>
         </div>
