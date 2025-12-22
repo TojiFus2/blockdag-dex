@@ -131,6 +131,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
   const [error, setError] = useState("");
   const [netStatus, setNetStatus] = useState("");
   const [isNetBusy, setIsNetBusy] = useState(false);
+  const [gasEstimateText, setGasEstimateText] = useState("—");
 
   // Persistent confirmation near Swap button
   const [confirm, setConfirm] = useState(null);
@@ -654,6 +655,76 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenInAddr, tokenOutAddr, sameTokenSelected, poolMissing, pairLoadError, wrappedAddr]);
 
+  useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      if (poolMissing || pairLoadError) {
+        if (alive) setGasEstimateText("Unable to estimate");
+        return;
+      }
+      if (!quote) {
+        if (alive) setGasEstimateText("—");
+        return;
+      }
+      if (!account || !dep?.router) {
+        if (alive) setGasEstimateText("Unable to estimate");
+        return;
+      }
+
+      try {
+        const provider = await getBrowserProvider();
+        const signer = await provider.getSigner();
+        const router = new ethers.Contract(dep.router, ROUTER_LITE2_ABI, signer);
+
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMinutes);
+        const path = quote.pathResolved;
+
+        let gasLimit;
+        if (tokenInMeta?.isNative) {
+          gasLimit = await router.swapExactETHForTokens.estimateGas(quote.minOutRaw, path, account, deadline, {
+            value: quote.amountInRaw,
+          });
+        } else if (tokenOutMeta?.isNative) {
+          gasLimit = await router.swapExactTokensForETH.estimateGas(
+            quote.amountInRaw,
+            quote.minOutRaw,
+            path,
+            account,
+            deadline
+          );
+        } else {
+          gasLimit = await router.swapExactTokensForTokens.estimateGas(
+            quote.amountInRaw,
+            quote.minOutRaw,
+            path,
+            account,
+            deadline
+          );
+        }
+
+        const feeData = await provider.getFeeData();
+        const gasPrice = feeData?.gasPrice ?? feeData?.maxFeePerGas ?? null;
+        if (!gasPrice) throw new Error("Missing gasPrice");
+
+        const costWei = gasLimit * gasPrice;
+        const cost = Number(ethers.formatEther(costWei));
+        if (!Number.isFinite(cost)) throw new Error("Bad cost");
+
+        const decimals = cost < 0.01 ? 6 : 4;
+        const text = `~${cost.toFixed(decimals)} BDAG`;
+        if (alive) setGasEstimateText(text);
+      } catch {
+        if (alive) setGasEstimateText("Unable to estimate");
+      }
+    }
+
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [quote, poolMissing, pairLoadError, dep?.router, account, tokenInMeta?.isNative, tokenOutMeta?.isNative, deadlineMinutes]);
+
   const primaryDisabled =
     !!pendingTx ||
     tradeTab === "limit" ||
@@ -1062,6 +1133,28 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
             >
               {primaryText}
             </button>
+
+            <div className="detailsPanel" style={{ marginTop: 10 }}>
+              <div className="settingsTitle" style={{ marginBottom: 8 }}>
+                Swap summary
+              </div>
+              <div className="detailsRow">
+                <div className="small">Expected output</div>
+                <div className="kv">{quote ? quoteText : "—"}</div>
+              </div>
+              <div className="detailsRow">
+                <div className="small">Slippage</div>
+                <div className="kv">{(slippageBps / 100).toFixed(2)}%</div>
+              </div>
+              <div className="detailsRow">
+                <div className="small">Minimum received</div>
+                <div className="kv">{quote ? minOutText : "—"}</div>
+              </div>
+              <div className="detailsRow">
+                <div className="small">Estimated gas</div>
+                <div className="kv">{gasEstimateText}</div>
+              </div>
+            </div>
 
             {/* NOW: confirmation is right under the Swap button */}
             {confirm && (
