@@ -364,12 +364,15 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     })();
   }, [dep?.router]);
 
-  // Default selection (testnet): default sell=wrapped, buy=TST (or first non-wrapped).
+  // Default selection (testnet): default sell=wrapped(BDAG), buy=WUSDT (fallback WUSDC).
   useEffect(() => {
     if (chainId !== 1043) return;
     if (!wrappedAddr) return;
 
-    const defOther = TOKENS_1043.find((t) => t.symbol === "TST") || TOKENS_1043.find((t) => !t.isWrapped);
+    const defOther =
+      TOKENS_1043.find((t) => t.symbol === "WUSDT") ||
+      TOKENS_1043.find((t) => t.symbol === "WUSDC") ||
+      TOKENS_1043.find((t) => !t.isWrapped);
     const defOtherAddr = defOther?.address || "";
 
     if (!tokenInAddr) setTokenInAddr(wrappedAddr);
@@ -907,7 +910,12 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
     if (!wrappedAddr) return;
     const other =
-      tokenList.find((t) => !t.isWrapped && !sameAddr(t.address, wrappedAddr)) || TOKENS_1043.find((t) => !t.isWrapped);
+      tokenList.find((t) => t.symbol === "WUSDT") ||
+      tokenList.find((t) => t.symbol === "WUSDC") ||
+      tokenList.find((t) => !t.isWrapped && !sameAddr(t.address, wrappedAddr)) ||
+      TOKENS_1043.find((t) => t.symbol === "WUSDT") ||
+      TOKENS_1043.find((t) => t.symbol === "WUSDC") ||
+      TOKENS_1043.find((t) => !t.isWrapped);
 
     if (next === "buy") {
       setTokenInAddr(wrappedAddr);
