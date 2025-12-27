@@ -50,6 +50,16 @@ function getAmountOut(amountIn, reserveIn, reserveOut) {
   return numerator / denominator;
 }
 
+// Inverse of getAmountOut: amountIn required for desired amountOut (rounded up)
+function getAmountIn(amountOut, reserveIn, reserveOut) {
+  if (amountOut <= 0n) return 0n;
+  if (reserveIn <= 0n || reserveOut <= 0n) return 0n;
+  if (amountOut >= reserveOut) return 0n;
+  const numerator = reserveIn * amountOut * 1000n;
+  const denominator = (reserveOut - amountOut) * 997n;
+  return numerator / denominator + 1n;
+}
+
 function clampBps(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return 50;
@@ -85,6 +95,33 @@ function compactDecStr(s, maxDecimals = 4) {
 
   const frac = fracRaw.slice(0, maxDecimals).replace(/0+$/, "");
   return frac ? `${intPart}.${frac}` : intPart;
+}
+
+function sanitizeAmountInput(raw, maxDecimals) {
+  const s = String(raw || "").replace(/[^\d.]/g, "");
+  if (!s) return "";
+  const parts = s.split(".");
+  const intPart = parts[0] || "0";
+  if (parts.length === 1) return intPart;
+  const frac = (parts[1] || "").slice(0, Math.max(0, maxDecimals));
+  return `${intPart}.${frac}`;
+}
+
+function trimDecimalsStr(str, maxDecimals) {
+  const s = String(str || "");
+  if (!s.includes(".")) return s;
+  const [a, b = ""] = s.split(".");
+  const trimmed = b.slice(0, Math.max(0, maxDecimals)).replace(/0+$/, "");
+  return trimmed ? `${a}.${trimmed}` : a;
+}
+
+function formatUnitsTrim(raw, decimals, maxDecimals) {
+  try {
+    const s = ethers.formatUnits(raw ?? 0n, Number(decimals ?? 18));
+    return trimDecimalsStr(s, maxDecimals);
+  } catch {
+    return "0";
+  }
 }
 
 function sleep(ms) {
@@ -151,7 +188,9 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
   // confirm = { type: 'success'|'fail', title: string, txHash?: string, details?: string }
 
   const [orderType, setOrderType] = useState("market"); // market|limit
-  const [amount, setAmount] = useState("0.001"); // always tokenIn amount
+  const [amount, setAmount] = useState("0.001"); // tokenIn input (string)
+  const [amountOut, setAmountOut] = useState(""); // tokenOut input (string)
+  const [amountLastEdited, setAmountLastEdited] = useState("in"); // in|out
   const [price, setPrice] = useState("0.0");
 
   const [tradeTab, setTradeTab] = useState("swap"); // swap|buy|sell
@@ -667,12 +706,14 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     if (!a || !b || sameAddr(a, b)) return null;
 
     let amountInRaw = 0n;
-    try {
-      amountInRaw = ethers.parseUnits(amount || "0", Number(tokenInMeta.decimals ?? 18));
-    } catch {
-      amountInRaw = 0n;
+    if (amountLastEdited !== "out") {
+      try {
+        amountInRaw = ethers.parseUnits(amount || "0", Number(tokenInMeta.decimals ?? 18));
+      } catch {
+        amountInRaw = 0n;
+      }
+      if (amountInRaw <= 0n) return null;
     }
-    if (amountInRaw <= 0n) return null;
 
     const token0IsIn = sameAddr(pairInfo.token0.addr, a);
     const token1IsIn = sameAddr(pairInfo.token1.addr, a);
@@ -681,13 +722,65 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     const reserveIn = token0IsIn ? pairInfo.reserves.r0 : pairInfo.reserves.r1;
     const reserveOut = token0IsIn ? pairInfo.reserves.r1 : pairInfo.reserves.r0;
 
-    const outRaw = getAmountOut(amountInRaw, reserveIn, reserveOut);
-    if (outRaw <= 0n) return null;
-    const minOutRaw = (outRaw * (10000n - BigInt(clampBps(slippageBps)))) / 10000n;
+    let outRaw = 0n;
+    let minOutRaw = 0n;
+
+    if (amountLastEdited === "out") {
+      let desiredOutRaw = 0n;
+      try {
+        desiredOutRaw = ethers.parseUnits(amountOut || "0", Number(tokenOutMeta.decimals ?? 18));
+      } catch {
+        desiredOutRaw = 0n;
+      }
+      if (desiredOutRaw <= 0n) return null;
+
+      amountInRaw = getAmountIn(desiredOutRaw, reserveIn, reserveOut);
+      if (amountInRaw <= 0n) return null;
+
+      outRaw = getAmountOut(amountInRaw, reserveIn, reserveOut);
+      if (outRaw <= 0n) return null;
+
+      // In "out-edited" mode we treat the user-entered amount as minimum received.
+      minOutRaw = desiredOutRaw;
+    } else {
+      outRaw = getAmountOut(amountInRaw, reserveIn, reserveOut);
+      if (outRaw <= 0n) return null;
+      minOutRaw = (outRaw * (10000n - BigInt(clampBps(slippageBps)))) / 10000n;
+    }
 
     return { amountInRaw, outRaw, minOutRaw, pathResolved: [a, b] };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderType, pairAddr, pairInfo, tokenInMeta, tokenOutMeta, amount, slippageBps, tokenInAddr, tokenOutAddr, wrappedAddr]);
+  }, [
+    orderType,
+    pairAddr,
+    pairInfo,
+    tokenInMeta,
+    tokenOutMeta,
+    amount,
+    amountOut,
+    amountLastEdited,
+    slippageBps,
+    tokenInAddr,
+    tokenOutAddr,
+    wrappedAddr,
+  ]);
+
+  const tokenInDecimals = Number(tokenInMeta?.decimals ?? 18);
+  const tokenOutDecimals = Number(tokenOutMeta?.decimals ?? 18);
+
+  const sellDisplay = useMemo(() => {
+    if (amountLastEdited === "out") {
+      if (!quote?.amountInRaw) return "0";
+      return formatUnitsTrim(quote.amountInRaw, tokenInDecimals, Math.min(8, tokenInDecimals));
+    }
+    return amount;
+  }, [amountLastEdited, quote?.amountInRaw, tokenInDecimals, amount]);
+
+  const buyDisplay = useMemo(() => {
+    if (amountLastEdited === "out") return amountOut;
+    if (!quote?.outRaw) return "";
+    return formatUnitsTrim(quote.outRaw, tokenOutDecimals, Math.min(8, tokenOutDecimals));
+  }, [amountLastEdited, amountOut, quote?.outRaw, tokenOutDecimals]);
 
   const quoteText = useMemo(() => {
     if (!tokenInAddr || !tokenOutAddr) return "\u2014";
@@ -1107,7 +1200,17 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                   </div>
                 </div>
                 <div className="swapBoxRow">
-                  <input className="input swapAmountInput" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!!pendingTx} />
+                  <input
+                    className="input swapAmountInput"
+                    value={sellDisplay}
+                    onChange={(e) => {
+                      if (pendingTx) return;
+                      setAmountLastEdited("in");
+                      setAmount(sanitizeAmountInput(e.target.value, tokenInDecimals));
+                    }}
+                    disabled={!!pendingTx}
+                    inputMode="decimal"
+                  />
                 </div>
               </div>
 
@@ -1121,6 +1224,8 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                   setTokenOutAddr(a);
                   setTradeTab("swap");
                   setOrderType("market");
+                  setAmountLastEdited("in");
+                  setAmountOut("");
                 }}
                 title="Flip direction"
                 type="button"
@@ -1147,7 +1252,17 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                   </div>
                 </div>
                 <div className="swapBoxRow">
-                  <div className="swapQuote">{quoteText}</div>
+                  <input
+                    className="input swapAmountInput"
+                    value={buyDisplay}
+                    onChange={(e) => {
+                      if (pendingTx) return;
+                      setAmountLastEdited("out");
+                      setAmountOut(sanitizeAmountInput(e.target.value, tokenOutDecimals));
+                    }}
+                    disabled={!!pendingTx}
+                    inputMode="decimal"
+                  />
                 </div>
                 {!!inlineWarning && (
                   <div className="small bad" style={{ marginTop: 8 }}>
@@ -1155,7 +1270,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
                   </div>
                 )}
                 <div className="swapMeta small">
-                  MinOut ({(clampBps(slippageBps) / 100).toFixed(2)}%): <b>{minOutText}</b>
+                  MinOut{amountLastEdited === "out" ? " (exact)" : ` (${(clampBps(slippageBps) / 100).toFixed(2)}%)`}: <b>{minOutText}</b>
                 </div>
               </div>
             </>

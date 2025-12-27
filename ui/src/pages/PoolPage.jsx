@@ -129,6 +129,13 @@ function calcRequiredUsdc(amountBdagRaw, reserveUsdcRaw, reserveWbdagRaw) {
   return (amountBdagRaw * reserveUsdcRaw) / reserveWbdagRaw;
 }
 
+function calcRequiredBdag(amountUsdcRaw, reserveUsdcRaw, reserveWbdagRaw) {
+  if (!amountUsdcRaw || amountUsdcRaw <= 0n) return 0n;
+  if (!reserveUsdcRaw || reserveUsdcRaw <= 0n) return 0n;
+  if (!reserveWbdagRaw || reserveWbdagRaw <= 0n) return 0n;
+  return (amountUsdcRaw * reserveWbdagRaw) / reserveUsdcRaw;
+}
+
 function calcPriceUsdcPerBdagRaw(reserveUsdcRaw, reserveWbdagRaw) {
   if (!reserveUsdcRaw || !reserveWbdagRaw || reserveWbdagRaw <= 0n) return 0n;
   // USDC raw (6 decimals) per 1 BDAG
@@ -190,6 +197,7 @@ export default function PoolPage() {
 
   const [addBdag, setAddBdag] = useState("0.1");
   const [addUsdc, setAddUsdc] = useState("");
+  const [addLastEdited, setAddLastEdited] = useState("bdag"); // bdag|usdc
   const [addStatus, setAddStatus] = useState("Idle");
   const [addTx, setAddTx] = useState("");
   const [addError, setAddError] = useState("");
@@ -208,12 +216,14 @@ export default function PoolPage() {
 
   const [createBdag, setCreateBdag] = useState("0.1");
   const [createUsdc, setCreateUsdc] = useState("");
+  const [createLastEdited, setCreateLastEdited] = useState("bdag"); // bdag|usdc
   const [createPoolStatus, setCreatePoolStatus] = useState("Idle");
   const [createPoolError, setCreatePoolError] = useState("");
   const [createPoolTx, setCreatePoolTx] = useState("");
 
   const [poolAddBdag, setPoolAddBdag] = useState("0.1");
   const [poolAddUsdc, setPoolAddUsdc] = useState("");
+  const [poolLastEdited, setPoolLastEdited] = useState("bdag"); // bdag|usdc
   const [poolDepositStatus, setPoolDepositStatus] = useState("Idle");
   const [poolDepositError, setPoolDepositError] = useState("");
   const [poolDepositTx, setPoolDepositTx] = useState("");
@@ -415,23 +425,30 @@ export default function PoolPage() {
   const reservesNonZero = resWbdagRaw > 0n && resUsdcRaw > 0n;
   const isAutoQuote = poolExists && reservesNonZero;
 
-  const addBdagRaw = useMemo(() => parseUnitsSafe(addBdag, 18) ?? 0n, [addBdag]);
+  const addBdagInputRaw = useMemo(() => parseUnitsSafe(addBdag, 18) ?? 0n, [addBdag]);
+  const addUsdcInputRaw = useMemo(() => parseUnitsSafe(addUsdc, wusdcDecimals) ?? 0n, [addUsdc, wusdcDecimals]);
 
-  const requiredUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return 0n;
-    return calcRequiredUsdc(addBdagRaw, resUsdcRaw, resWbdagRaw);
-  }, [isAutoQuote, addBdagRaw, resUsdcRaw, resWbdagRaw]);
+  const addBdagRaw = useMemo(() => {
+    if (!isAutoQuote) return addBdagInputRaw;
+    if (addLastEdited === "usdc") return calcRequiredBdag(addUsdcInputRaw, resUsdcRaw, resWbdagRaw);
+    return addBdagInputRaw;
+  }, [isAutoQuote, addLastEdited, addBdagInputRaw, addUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
   const addUsdcRaw = useMemo(() => {
-    if (isAutoQuote) return requiredUsdcRaw;
-    const x = parseUnitsSafe(addUsdc, wusdcDecimals);
-    return x ?? 0n;
-  }, [addUsdc, isAutoQuote, requiredUsdcRaw, wusdcDecimals]);
+    if (!isAutoQuote) return addUsdcInputRaw;
+    if (addLastEdited === "bdag") return calcRequiredUsdc(addBdagInputRaw, resUsdcRaw, resWbdagRaw);
+    return addUsdcInputRaw;
+  }, [isAutoQuote, addLastEdited, addBdagInputRaw, addUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
-  const addUsdcText = useMemo(() => {
-    const raw = isAutoQuote ? requiredUsdcRaw : addUsdcRaw;
-    return formatUnitsTrim(raw, wusdcDecimals, 6);
-  }, [isAutoQuote, requiredUsdcRaw, addUsdcRaw, wusdcDecimals]);
+  const addBdagDisplay = useMemo(() => {
+    if (isAutoQuote && addLastEdited === "usdc") return formatUnitsTrim(addBdagRaw, 18, 18);
+    return addBdag;
+  }, [isAutoQuote, addLastEdited, addBdagRaw, addBdag]);
+
+  const addUsdcDisplay = useMemo(() => {
+    if (isAutoQuote && addLastEdited === "bdag") return formatUnitsTrim(addUsdcRaw, wusdcDecimals, 6);
+    return addUsdc;
+  }, [isAutoQuote, addLastEdited, addUsdcRaw, addUsdc, wusdcDecimals]);
 
   const priceUsdcPerBdagText = useMemo(() => {
     const p = calcPriceUsdcPerBdagRaw(resUsdcRaw, resWbdagRaw);
@@ -443,41 +460,55 @@ export default function PoolPage() {
 
   const isMainOpen = expandedPoolId === MAIN_POOL_ID;
 
-  const createBdagRaw = useMemo(() => parseUnitsSafe(createBdag, 18) ?? 0n, [createBdag]);
+  const createBdagInputRaw = useMemo(() => parseUnitsSafe(createBdag, 18) ?? 0n, [createBdag]);
+  const createUsdcInputRaw = useMemo(() => parseUnitsSafe(createUsdc, wusdcDecimals) ?? 0n, [createUsdc, wusdcDecimals]);
 
-  const createRequiredUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return 0n;
-    return calcRequiredUsdc(createBdagRaw, resUsdcRaw, resWbdagRaw);
-  }, [isAutoQuote, createBdagRaw, resUsdcRaw, resWbdagRaw]);
+  const createBdagRaw = useMemo(() => {
+    if (!isAutoQuote) return createBdagInputRaw;
+    if (createLastEdited === "usdc") return calcRequiredBdag(createUsdcInputRaw, resUsdcRaw, resWbdagRaw);
+    return createBdagInputRaw;
+  }, [isAutoQuote, createLastEdited, createBdagInputRaw, createUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
   const createUsdcRaw = useMemo(() => {
-    if (isAutoQuote) return createRequiredUsdcRaw;
-    const x = parseUnitsSafe(createUsdc, wusdcDecimals);
-    return x ?? 0n;
-  }, [createUsdc, isAutoQuote, createRequiredUsdcRaw, wusdcDecimals]);
+    if (!isAutoQuote) return createUsdcInputRaw;
+    if (createLastEdited === "bdag") return calcRequiredUsdc(createBdagInputRaw, resUsdcRaw, resWbdagRaw);
+    return createUsdcInputRaw;
+  }, [isAutoQuote, createLastEdited, createBdagInputRaw, createUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
-  const createUsdcText = useMemo(() => {
-    const raw = isAutoQuote ? createRequiredUsdcRaw : createUsdcRaw;
-    return formatUnitsTrim(raw, wusdcDecimals, 6);
-  }, [isAutoQuote, createRequiredUsdcRaw, createUsdcRaw, wusdcDecimals]);
+  const createBdagDisplay = useMemo(() => {
+    if (isAutoQuote && createLastEdited === "usdc") return formatUnitsTrim(createBdagRaw, 18, 18);
+    return createBdag;
+  }, [isAutoQuote, createLastEdited, createBdagRaw, createBdag]);
 
-  const poolAddBdagRaw = useMemo(() => parseUnitsSafe(poolAddBdag, 18) ?? 0n, [poolAddBdag]);
+  const createUsdcDisplay = useMemo(() => {
+    if (isAutoQuote && createLastEdited === "bdag") return formatUnitsTrim(createUsdcRaw, wusdcDecimals, 6);
+    return createUsdc;
+  }, [isAutoQuote, createLastEdited, createUsdcRaw, createUsdc, wusdcDecimals]);
 
-  const poolRequiredUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return 0n;
-    return calcRequiredUsdc(poolAddBdagRaw, resUsdcRaw, resWbdagRaw);
-  }, [isAutoQuote, poolAddBdagRaw, resUsdcRaw, resWbdagRaw]);
+  const poolAddBdagInputRaw = useMemo(() => parseUnitsSafe(poolAddBdag, 18) ?? 0n, [poolAddBdag]);
+  const poolAddUsdcInputRaw = useMemo(() => parseUnitsSafe(poolAddUsdc, wusdcDecimals) ?? 0n, [poolAddUsdc, wusdcDecimals]);
+
+  const poolAddBdagRaw = useMemo(() => {
+    if (!isAutoQuote) return poolAddBdagInputRaw;
+    if (poolLastEdited === "usdc") return calcRequiredBdag(poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw);
+    return poolAddBdagInputRaw;
+  }, [isAutoQuote, poolLastEdited, poolAddBdagInputRaw, poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
   const poolAddUsdcRaw = useMemo(() => {
-    if (isAutoQuote) return poolRequiredUsdcRaw;
-    const x = parseUnitsSafe(poolAddUsdc, wusdcDecimals);
-    return x ?? 0n;
-  }, [poolAddUsdc, isAutoQuote, poolRequiredUsdcRaw, wusdcDecimals]);
+    if (!isAutoQuote) return poolAddUsdcInputRaw;
+    if (poolLastEdited === "bdag") return calcRequiredUsdc(poolAddBdagInputRaw, resUsdcRaw, resWbdagRaw);
+    return poolAddUsdcInputRaw;
+  }, [isAutoQuote, poolLastEdited, poolAddBdagInputRaw, poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
 
-  const poolAddUsdcText = useMemo(() => {
-    const raw = isAutoQuote ? poolRequiredUsdcRaw : poolAddUsdcRaw;
-    return formatUnitsTrim(raw, wusdcDecimals, 6);
-  }, [isAutoQuote, poolRequiredUsdcRaw, poolAddUsdcRaw, wusdcDecimals]);
+  const poolAddBdagDisplay = useMemo(() => {
+    if (isAutoQuote && poolLastEdited === "usdc") return formatUnitsTrim(poolAddBdagRaw, 18, 18);
+    return poolAddBdag;
+  }, [isAutoQuote, poolLastEdited, poolAddBdagRaw, poolAddBdag]);
+
+  const poolAddUsdcDisplay = useMemo(() => {
+    if (isAutoQuote && poolLastEdited === "bdag") return formatUnitsTrim(poolAddUsdcRaw, wusdcDecimals, 6);
+    return poolAddUsdc;
+  }, [isAutoQuote, poolLastEdited, poolAddUsdcRaw, poolAddUsdc, wusdcDecimals]);
 
   async function refreshPools() {
     const base = getApiBase();
@@ -489,9 +520,9 @@ export default function PoolPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       setPools(Array.isArray(json.pools) ? json.pools : []);
-      setPoolsStatus("Ready");
+      setPoolsStatus("Idle");
     } catch (e) {
-      setPoolsStatus("Ready");
+      setPoolsStatus("Idle");
       setPoolsError(toErr(e));
     }
   }
@@ -953,8 +984,11 @@ export default function PoolPage() {
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={createBdag}
-                    onChange={(e) => setCreateBdag(sanitizeAmountInput(e.target.value, 18))}
+                    value={createBdagDisplay}
+                    onChange={(e) => {
+                      setCreateLastEdited("bdag");
+                      setCreateBdag(sanitizeAmountInput(e.target.value, 18));
+                    }}
                     placeholder="0.0"
                     inputMode="decimal"
                     disabled={!!pendingTx || !isSupportedChain}
@@ -970,17 +1004,19 @@ export default function PoolPage() {
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={isAutoQuote ? createUsdcText : createUsdc}
-                    onChange={(e) => setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals))}
+                    value={createUsdcDisplay}
+                    onChange={(e) => {
+                      setCreateLastEdited("usdc");
+                      setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                    }}
                     placeholder="0.0"
                     inputMode="decimal"
-                    disabled={!!pendingTx || !isSupportedChain || isAutoQuote}
-                    readOnly={isAutoQuote}
+                    disabled={!!pendingTx || !isSupportedChain}
                   />
                 </div>
                 {isAutoQuote && (
                   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                    Required WUSDC is auto-calculated from reserves.
+                    Other side is auto-calculated from reserves.
                   </div>
                 )}
               </div>
@@ -1066,8 +1102,11 @@ export default function PoolPage() {
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={addBdag}
-                          onChange={(e) => setAddBdag(sanitizeAmountInput(e.target.value, 18))}
+                          value={addBdagDisplay}
+                          onChange={(e) => {
+                            setAddLastEdited("bdag");
+                            setAddBdag(sanitizeAmountInput(e.target.value, 18));
+                          }}
                           placeholder="0.0"
                           inputMode="decimal"
                           disabled={!!pendingTx || !isSupportedChain}
@@ -1083,17 +1122,19 @@ export default function PoolPage() {
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={isAutoQuote ? addUsdcText : addUsdc}
-                          onChange={(e) => setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals))}
+                          value={addUsdcDisplay}
+                          onChange={(e) => {
+                            setAddLastEdited("usdc");
+                            setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                          }}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain || isAutoQuote}
-                          readOnly={isAutoQuote}
+                          disabled={!!pendingTx || !isSupportedChain}
                         />
                       </div>
                       {isAutoQuote && (
                         <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                          Required WUSDC is auto-calculated from reserves.
+                          Other side is auto-calculated from reserves.
                         </div>
                       )}
                     </div>
@@ -1205,14 +1246,17 @@ export default function PoolPage() {
                             <div className="swapTokenPill">BDAG</div>
                           </div>
                           <div className="swapBoxRow">
-                            <input
-                              className="input swapAmountInput"
-                              value={poolAddBdag}
-                              onChange={(e) => setPoolAddBdag(sanitizeAmountInput(e.target.value, 18))}
-                              placeholder="0.0"
-                              inputMode="decimal"
-                              disabled={!!pendingTx || !isSupportedChain}
-                            />
+                              <input
+                                className="input swapAmountInput"
+                                value={poolAddBdagDisplay}
+                                onChange={(e) => {
+                                  setPoolLastEdited("bdag");
+                                  setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
+                                }}
+                                placeholder="0.0"
+                                inputMode="decimal"
+                                disabled={!!pendingTx || !isSupportedChain}
+                              />
                           </div>
                         </div>
 
@@ -1222,22 +1266,24 @@ export default function PoolPage() {
                             <div className="swapTokenPill">WUSDC</div>
                           </div>
                           <div className="swapBoxRow">
-                            <input
-                              className="input swapAmountInput"
-                              value={isAutoQuote ? poolAddUsdcText : poolAddUsdc}
-                              onChange={(e) => setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals))}
-                              placeholder="0.0"
-                              inputMode="decimal"
-                              disabled={!!pendingTx || !isSupportedChain || isAutoQuote}
-                              readOnly={isAutoQuote}
-                            />
-                          </div>
-                          {isAutoQuote && (
-                            <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                              Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} WUSDC.
+                              <input
+                                className="input swapAmountInput"
+                                value={poolAddUsdcDisplay}
+                                onChange={(e) => {
+                                  setPoolLastEdited("usdc");
+                                  setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                                }}
+                                placeholder="0.0"
+                                inputMode="decimal"
+                                disabled={!!pendingTx || !isSupportedChain}
+                              />
                             </div>
-                          )}
-                        </div>
+                            {isAutoQuote && (
+                              <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+                                Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} WUSDC.
+                              </div>
+                            )}
+                          </div>
 
                         <button
                           type="button"
