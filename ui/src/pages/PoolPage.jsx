@@ -230,19 +230,44 @@ export default function PoolPage() {
 
   const walletOk = hasInjected();
 
-  const wusdcAddr = useMemo(() => {
-    const t = (TOKENS_1043 || []).find((x) => x.symbol === "WUSDC");
-    if (!t?.address) return null;
-    return t.address;
+  const quoteOptions = useMemo(() => {
+    const list = TOKENS_1043 || [];
+    return list.filter((x) => x && (x.symbol === "WUSDC" || x.symbol === "WUSDT") && x.address);
   }, []);
+
+  const [selectedQuoteSymbol, setSelectedQuoteSymbol] = useState(() => {
+    const list = TOKENS_1043 || [];
+    const hasWusdt = list.some((x) => x && x.symbol === "WUSDT" && x.address);
+    return hasWusdt ? "WUSDT" : "WUSDC";
+  });
+
+  useEffect(() => {
+    if (!quoteOptions.length) return;
+    const ok = quoteOptions.some((t) => t && t.symbol === selectedQuoteSymbol);
+    if (!ok) setSelectedQuoteSymbol(quoteOptions[0].symbol);
+  }, [quoteOptions, selectedQuoteSymbol]);
+
+  const quoteToken = useMemo(() => {
+    const list = TOKENS_1043 || [];
+    const t = list.find((x) => x.symbol === selectedQuoteSymbol) || list.find((x) => x.symbol === "WUSDC");
+    return t || null;
+  }, [selectedQuoteSymbol]);
+
+  const wusdcAddr = useMemo(() => {
+    if (!quoteToken?.address) return null;
+    return quoteToken.address;
+  }, [quoteToken]);
+
+  const quoteSymbol = useMemo(() => quoteToken?.symbol || "WUSDC", [quoteToken]);
+  const selectedPairKey = useMemo(() => `WBDAG/${quoteSymbol}`, [quoteSymbol]);
 
   const isSupportedChain = chainId === CHAIN_ID;
 
   useEffect(() => {
-    const t = (TOKENS_1043 || []).find((x) => x.symbol === "WUSDC");
-    if (!t) return;
-    setWusdcDecimals(Number(t.decimals ?? 6));
-  }, []);
+    // keep decimals synced if token list changes at runtime (e.g. via env var)
+    if (!quoteToken) return;
+    setWusdcDecimals(Number(quoteToken.decimals ?? 6));
+  }, [quoteToken]);
 
   async function refreshBase() {
     if (!walletOk) {
@@ -327,7 +352,7 @@ export default function PoolPage() {
 
   const factoryAddr = routerFactoryAddr || dep?.factory || "";
 
-  // Read WUSDC decimals from chain (best-effort)
+  // Read quote token decimals from chain (best-effort)
   useEffect(() => {
     if (!isSupportedChain) return;
     if (!walletOk) return;
@@ -604,7 +629,7 @@ export default function PoolPage() {
       const res = await fetch(`${base}/api/pools`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: account }),
+        body: JSON.stringify({ owner: account, pair: selectedPairKey, baseSymbol: "BDAG", quoteSymbol }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
@@ -660,7 +685,7 @@ export default function PoolPage() {
       return null;
     }
     if (!wusdcAddr) {
-      setError("WUSDC not configured");
+      setError(`${quoteSymbol} not configured`);
       return null;
     }
 
@@ -750,7 +775,7 @@ export default function PoolPage() {
     });
   }
 
-  async function onDepositToPool(poolId) {
+  async function onDepositToPool(poolId, poolPair = "") {
     if (pendingTx) return;
     if (!walletOk) return;
     if (!account) {
@@ -759,6 +784,10 @@ export default function PoolPage() {
     }
     if (!poolId) {
       setPoolDepositError("Open a pool");
+      return;
+    }
+    if (poolPair && String(poolPair).toLowerCase() !== String(selectedPairKey).toLowerCase()) {
+      setPoolDepositError(`This pool is ${poolPair}. Switch pair to match before adding liquidity.`);
       return;
     }
     if (!isAutoQuote) {
@@ -829,6 +858,10 @@ export default function PoolPage() {
     let maxAllowed = userLpRaw;
     if (recordPoolId) {
       const rec = (pools || []).find((x) => x && x.id === recordPoolId);
+      const recPair = String(rec?.pair || "");
+      if (recPair && recPair.toLowerCase() !== String(selectedPairKey).toLowerCase()) {
+        return setRemoveError(`This pool is ${recPair}. Switch pair to match before removing liquidity.`);
+      }
       const poolUserLpRaw = safeBigInt(rec?.userLpRaw);
       maxAllowed = poolUserLpRaw < userLpRaw ? poolUserLpRaw : userLpRaw;
       if (maxAllowed <= 0n) return setRemoveError("No LP in this pool");
@@ -962,19 +995,40 @@ export default function PoolPage() {
               <div className="cardHeader swapHeader">
                 <div>
                   <div className="title">Create pool</div>
-                  <div className="sub">BDAG/WUSDC</div>
+                  <div className="sub">{`BDAG/${quoteSymbol}`}</div>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    className="select"
+                    value={selectedQuoteSymbol}
+                    onChange={(e) => {
+                      if (pendingTx) return;
+                      setSelectedQuoteSymbol(e.target.value);
+                    }}
+                    disabled={!!pendingTx || !quoteOptions.length}
+                    style={{ padding: "8px 10px", borderRadius: 10 }}
+                    aria-label="Select main pair"
+                    title="Select main pair"
+                  >
+                    {quoteOptions.map((t) => (
+                      <option key={t.symbol} value={t.symbol}>
+                        {`BDAG/${t.symbol}`}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
               <div className="swapBox">
                 <div className="swapBoxHead">
-                  <div className="swapBoxTitle">Create pool</div>
-                  <div className="swapTokenPill">BDAG/WUSDC</div>
-                </div>
-                <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                  Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} WUSDC.
-                </div>
-              </div>
+                   <div className="swapBoxTitle">Create pool</div>
+                   <div className="swapTokenPill">{`BDAG/${quoteSymbol}`}</div>
+                 </div>
+                 <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+                   Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}.
+                 </div>
+               </div>
 
               <div className="swapBox" style={{ marginTop: 12 }}>
                 <div className="swapBoxHead">
@@ -998,8 +1052,8 @@ export default function PoolPage() {
 
               <div className="swapBox" style={{ marginTop: 12 }}>
                 <div className="swapBoxHead">
-                  <div className="swapBoxTitle">WUSDC amount</div>
-                  <div className="swapTokenPill">WUSDC</div>
+                  <div className="swapBoxTitle">{`${quoteSymbol} amount`}</div>
+                  <div className="swapTokenPill">{quoteSymbol}</div>
                 </div>
                 <div className="swapBoxRow">
                   <input
@@ -1046,7 +1100,7 @@ export default function PoolPage() {
               <div className="cardHeader swapHeader">
                 <div>
                   <div className="title">Pools</div>
-                  <div className="sub">Main pool + user pools</div>
+                  <div className="sub">All pools (all pairs)</div>
                 </div>
                 <button
                   type="button"
@@ -1079,11 +1133,11 @@ export default function PoolPage() {
                 <div className="small" style={{ marginTop: 6 }}>
                   Reserves:{" "}
                   <span className="kv">
-                    {formatUnitsTrim(resWbdagRaw, 18, 6)} BDAG + {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)} WUSDC
+                    {formatUnitsTrim(resWbdagRaw, 18, 6)} BDAG + {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)} {quoteSymbol}
                   </span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
-                  Price: <span className="kv">1 BDAG ~ {priceUsdcPerBdagText} WUSDC</span>
+                  Price: <span className="kv">1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}</span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
                   LP totalSupply: <span className="kv">{lpTotalText}</span>
@@ -1116,8 +1170,8 @@ export default function PoolPage() {
 
                     <div className="swapBox" style={{ marginTop: 12 }}>
                       <div className="swapBoxHead">
-                        <div className="swapBoxTitle">WUSDC amount</div>
-                        <div className="swapTokenPill">WUSDC</div>
+                        <div className="swapBoxTitle">{`${quoteSymbol} amount`}</div>
+                        <div className="swapTokenPill">{quoteSymbol}</div>
                       </div>
                       <div className="swapBoxRow">
                         <input
@@ -1215,10 +1269,16 @@ export default function PoolPage() {
                 const isOpen = expandedPoolId === p.id;
                 const idShort = String(p.id || "").slice(-6).toUpperCase();
                 const ownerShort = p?.owner ? `${String(p.owner).slice(0, 6)}...${String(p.owner).slice(-4)}` : "-";
+                const poolPair = String(p?.pair || "");
+                const poolQuoteSymbol = poolPair.includes("/") ? poolPair.split("/")[1] : "";
+                const poolQuoteToken = (TOKENS_1043 || []).find((t) => t && t.symbol === poolQuoteSymbol);
+                const poolQuoteDecimals = Number(poolQuoteToken?.decimals ?? wusdcDecimals ?? 6);
+                const poolQuoteLabel = poolQuoteSymbol || quoteSymbol;
+                const poolMatchesSelected = !!poolPair && poolPair.toLowerCase() === String(selectedPairKey).toLowerCase();
                 const totalBdagText = formatUnitsTrim(safeBigInt(p?.totalBdagRaw), 18, 6);
-                const totalUsdcText = formatUnitsTrim(safeBigInt(p?.totalUsdcRaw), wusdcDecimals, 2);
+                const totalUsdcText = formatUnitsTrim(safeBigInt(p?.totalUsdcRaw), poolQuoteDecimals, 2);
                 const poolUserLpRaw = safeBigInt(p?.userLpRaw);
-                const removableLpRaw = poolUserLpRaw < userLpRaw ? poolUserLpRaw : userLpRaw;
+                const removableLpRaw = poolMatchesSelected ? (poolUserLpRaw < userLpRaw ? poolUserLpRaw : userLpRaw) : 0n;
                 const removableLpText = formatUnitsTrim(removableLpRaw, 18, 18);
 
                 return (
@@ -1231,15 +1291,25 @@ export default function PoolPage() {
                     <div className="small" style={{ marginTop: 8 }}>
                       Owner: <span className="kv">{ownerShort}</span>
                     </div>
+                    {!!poolPair && (
+                      <div className="small" style={{ marginTop: 6 }}>
+                        Pair: <span className="kv">{poolPair}</span>
+                      </div>
+                    )}
                     <div className="small" style={{ marginTop: 6 }}>
                       Activity: <span className="kv">{p.depositCount || 0}</span> - Total:{" "}
                       <span className="kv">
-                        {totalBdagText} BDAG + {totalUsdcText} WUSDC
+                        {totalBdagText} BDAG + {totalUsdcText} {poolQuoteLabel}
                       </span>
                     </div>
 
                     {isOpen && (
                       <>
+                        {!poolMatchesSelected && !!poolPair && (
+                          <div className="swapStatus bad" style={{ marginTop: 10 }}>
+                            This pool uses {poolPair}. Switch main pair selector to match to manage liquidity.
+                          </div>
+                        )}
                         <div className="swapBox" style={{ marginTop: 12 }}>
                           <div className="swapBoxHead">
                             <div className="swapBoxTitle">BDAG amount</div>
@@ -1255,15 +1325,15 @@ export default function PoolPage() {
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain}
+                                disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
                               />
                           </div>
                         </div>
 
                         <div className="swapBox" style={{ marginTop: 12 }}>
                           <div className="swapBoxHead">
-                            <div className="swapBoxTitle">WUSDC amount</div>
-                            <div className="swapTokenPill">WUSDC</div>
+                            <div className="swapBoxTitle">{`${poolQuoteLabel} amount`}</div>
+                            <div className="swapTokenPill">{poolQuoteLabel}</div>
                           </div>
                           <div className="swapBoxRow">
                               <input
@@ -1275,21 +1345,21 @@ export default function PoolPage() {
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain}
+                                disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
                               />
                             </div>
                             {isAutoQuote && (
                               <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                                Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} WUSDC.
+                                Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}.
                               </div>
                             )}
-                          </div>
+                        </div>
 
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !isAutoQuote || !dep?.router || !wusdcAddr}
-                          onClick={() => onDepositToPool(p.id)}
+                          disabled={!!pendingTx || !isSupportedChain || !isAutoQuote || !dep?.router || !wusdcAddr || (!!poolPair && !poolMatchesSelected)}
+                          onClick={() => onDepositToPool(p.id, poolPair)}
                         >
                           {pendingTx ? "Pending transaction..." : "Add Liquidity"}
                         </button>
@@ -1321,14 +1391,14 @@ export default function PoolPage() {
                               onChange={(e) => setRemoveLp(sanitizeAmountInput(e.target.value, 18))}
                               placeholder="0.0"
                               inputMode="decimal"
-                              disabled={!!pendingTx || !isSupportedChain}
+                              disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
                             />
                             <button
                               type="button"
                               className="btn"
                               style={{ padding: "8px 10px", borderRadius: 10, whiteSpace: "nowrap" }}
                               onClick={() => setRemoveLp(removableLpText)}
-                              disabled={!!pendingTx || removableLpRaw <= 0n}
+                              disabled={!!pendingTx || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
                             >
                               Max
                             </button>
@@ -1341,7 +1411,7 @@ export default function PoolPage() {
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !poolExists || removableLpRaw <= 0n}
+                          disabled={!!pendingTx || !isSupportedChain || !poolExists || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
                           onClick={() => onRemoveLiquidity(p.id)}
                         >
                           {pendingTx ? "Pending transaction..." : "Remove Liquidity"}

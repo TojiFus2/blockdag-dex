@@ -1,4 +1,6 @@
 // ui/src/lib/tokens_1043.js
+// const WUSDT_ADDR = import.meta.env.VITE_WUSDT || "";
+
 export const TOKENS_1043 = [
   {
     symbol: "WBDAG",
@@ -20,6 +22,14 @@ export const TOKENS_1043 = [
     symbol: "WUSDC",
     name: "WUSD Coin",
     address: "0xd7eFc4e37306b379C88DBf8749189C480bfEA340",
+    decimals: 6,
+    isNative: false,
+    isWrapped: false,
+  },
+  {
+    symbol: "WUSDT",
+    name: "Wrapped USD Tether",
+    address: "0xC196eB549A4CdC2bB9E78E532B514aEd17AD1536",
     decimals: 6,
     isNative: false,
     isWrapped: false,

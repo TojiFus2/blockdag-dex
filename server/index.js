@@ -133,7 +133,11 @@ const server = http.createServer(async (req, res) => {
       const owner = String(body?.owner || "");
       const name = String(body?.name || "");
 
-      const pool = createPool({ owner, name });
+      const pair = String(body?.pair || "");
+      const baseSymbol = String(body?.baseSymbol || "");
+      const quoteSymbol = String(body?.quoteSymbol || "");
+
+      const pool = createPool({ owner, name, pair, baseSymbol, quoteSymbol });
       sendJson(req, res, 200, { ok: true, pool });
       return;
     }

@@ -91,6 +91,12 @@ select {
   color: inherit;
 }
 
+/* Ensure native select dropdown options stay readable (Windows/Chrome can render white bg). */
+select option {
+  color: #111;
+  background: #fff;
+}
+
 .container {
   position: relative;
   z-index: 2;

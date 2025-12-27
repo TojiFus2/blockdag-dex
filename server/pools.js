@@ -134,21 +134,30 @@ function getPool(poolId) {
   return { chainId: CHAIN_ID, pool: { ...pool, ...sumDepositsForPool(store.deposits, poolId) }, deposits };
 }
 
-function createPool({ owner, name }) {
+function createPool({ owner, name, pair, baseSymbol, quoteSymbol }) {
   if (!ethers.isAddress(owner || "")) throw new Error("Invalid owner address");
 
   const store = readStore();
 
   const id = makeId("pool");
   const ts = nowMs();
+
+  const cleanPair = String(pair || "").trim().slice(0, 32);
+  const cleanBase = String(baseSymbol || "").trim().slice(0, 16);
+  const cleanQuote = String(quoteSymbol || "").trim().slice(0, 16);
+
+  const finalBase = cleanBase || "BDAG";
+  const finalQuote = cleanQuote || "WUSDC";
+  const finalPair = cleanPair || `WBDAG/${finalQuote}`;
+
   const pool = {
     id,
     chainId: CHAIN_ID,
     owner,
     name: String(name || "").trim().slice(0, 64) || "",
-    pair: "WBDAG/WUSDC",
-    baseSymbol: "BDAG",
-    quoteSymbol: "USDC",
+    pair: finalPair,
+    baseSymbol: finalBase,
+    quoteSymbol: finalQuote,
     createdAtMs: ts,
     createdAtIso: new Date(ts).toISOString(),
   };
