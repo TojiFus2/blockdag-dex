@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "chainId": 1043,
+  "pools": [
+    {
+      "id": "pool_1766587491445_cc569149",
+      "chainId": 1043,
+      "owner": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "name": "Bdag1",
+      "pair": "WBDAG/WUSDC",
+      "baseSymbol": "BDAG",
+      "quoteSymbol": "USDC",
+      "createdAtMs": 1766587491445,
+      "createdAtIso": "2025-12-24T14:44:51.445Z"
+    },
+    {
+      "id": "pool_1766845719406_9f528c74",
+      "chainId": 1043,
+      "owner": "0xb2bef4648bc508ec337911e67d3725f6379b0e24",
+      "name": "",
+      "pair": "WBDAG/WUSDC",
+      "baseSymbol": "BDAG",
+      "quoteSymbol": "USDC",
+      "createdAtMs": 1766845719406,
+      "createdAtIso": "2025-12-27T14:28:39.406Z"
+    }
+  ],
+  "deposits": [
+    {
+      "id": "dep_1766587529392_69bf8ae9",
+      "poolId": "pool_1766587491445_cc569149",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "bdagRaw": "100000000000000",
+      "usdcRaw": "65786011",
+      "txHash": "0xe129a10062451ccb9b0a39047c1b7cffa088e293896ce060fc5e304af27ee8f9",
+      "createdAtMs": 1766587529392,
+      "createdAtIso": "2025-12-24T14:45:29.392Z"
+    },
+    {
+      "id": "dep_1766599606481_992f0679",
+      "poolId": "pool_1766587491445_cc569149",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "bdagRaw": "10000000000000000",
+      "usdcRaw": "6578601126",
+      "txHash": "0x5607c40dfb11c4404daa426c94ed10cc1ea52659fecb59909b902774242e190d",
+      "createdAtMs": 1766599606481,
+      "createdAtIso": "2025-12-24T18:06:46.481Z"
+    },
+    {
+      "id": "dep_1766845694813_f3aea3e3",
+      "poolId": "pool_1766587491445_cc569149",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "kind": "deposit",
+      "bdagRaw": "100000000000000",
+      "usdcRaw": "65786011",
+      "lpRaw": "65786011000",
+      "txHash": "0xff15d39f71a6e920264350cef09f8609d6e0ada801baf2396b3ca81f8894887c",
+      "createdAtMs": 1766845694813,
+      "createdAtIso": "2025-12-27T14:28:14.813Z"
+    },
+    {
+      "id": "dep_1766845719411_dce69360",
+      "poolId": "pool_1766845719406_9f528c74",
+      "wallet": "0xb2bef4648bc508ec337911e67d3725f6379b0e24",
+      "kind": "deposit",
+      "bdagRaw": "100000000000000",
+      "usdcRaw": "65786011",
+      "lpRaw": "65786011000",
+      "txHash": "0x2c4d7175fa2ac3331e8fa9bd994fe806fe4f6ef2238c44952fca2d0efc75a4c4",
+      "createdAtMs": 1766845719411,
+      "createdAtIso": "2025-12-27T14:28:39.411Z"
+    },
+    {
+      "id": "wd_1766845803023_41cad604",
+      "poolId": "pool_1766587491445_cc569149",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "kind": "withdraw",
+      "bdagRaw": "99999999600880",
+      "usdcRaw": "65786011",
+      "lpRaw": "65786011000",
+      "txHash": "0xebcf8db2eed31b7c8a75bed35ea9072cbf3b4e1bf6f38cbf2334ff7c721eabb1",
+      "createdAtMs": 1766845803023,
+      "createdAtIso": "2025-12-27T14:30:03.023Z"
+    },
+    {
+      "id": "wd_1766845847184_726d8bde",
+      "poolId": "pool_1766845719406_9f528c74",
+      "wallet": "0xb2bef4648bc508ec337911e67d3725f6379b0e24",
+      "kind": "withdraw",
+      "bdagRaw": "99999999600880",
+      "usdcRaw": "65786011",
+      "lpRaw": "65786011000",
+      "txHash": "0x28d69155bad7d98bb3059a5985c16129c212d3dfb2021c7800c895066fb57568",
+      "createdAtMs": 1766845847184,
+      "createdAtIso": "2025-12-27T14:30:47.184Z"
+    }
+  ]
+}
