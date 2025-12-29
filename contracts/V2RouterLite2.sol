@@ -200,6 +200,76 @@ contract V2RouterLite2 {
     }
 
     // -----------------------------
+    // Add Liquidity (token/token)
+    // -----------------------------
+
+    function _addLiquidityTokens(
+        address tokenA,
+        address tokenB,
+        uint256 amountADesired,
+        uint256 amountBDesired,
+        uint256 amountAMin,
+        uint256 amountBMin
+    ) internal returns (address pair, uint256 amountA, uint256 amountB) {
+        require(tokenA != address(0) && tokenB != address(0), "RL2:ZERO_TOKEN");
+        require(tokenA != tokenB, "RL2:IDENTICAL");
+        require(amountADesired > 0 && amountBDesired > 0, "RL2:ZERO_DESIRED");
+
+        pair = _ensurePair(tokenA, tokenB);
+        (uint256 reserveA, uint256 reserveB) = _getReservesIfExists(tokenA, tokenB);
+
+        if (reserveA == 0 && reserveB == 0) {
+            amountA = amountADesired;
+            amountB = amountBDesired;
+        } else {
+            uint256 amountBOptimal = _quote(amountADesired, reserveA, reserveB);
+            if (amountBOptimal <= amountBDesired) {
+                require(amountBOptimal >= amountBMin, "RL2:INSUFF_B");
+                amountA = amountADesired;
+                amountB = amountBOptimal;
+            } else {
+                uint256 amountAOptimal = _quote(amountBDesired, reserveB, reserveA);
+                require(amountAOptimal >= amountAMin, "RL2:INSUFF_A");
+                amountA = amountAOptimal;
+                amountB = amountBDesired;
+            }
+        }
+
+        require(amountA >= amountAMin, "RL2:INSUFF_A");
+        require(amountB >= amountBMin, "RL2:INSUFF_B");
+    }
+
+    function _mintLiquidity(
+        address pair,
+        address tokenA,
+        address tokenB,
+        uint256 amountA,
+        uint256 amountB,
+        address to
+    ) internal returns (uint256 liquidity) {
+        tokenA.safeTransferFrom(msg.sender, pair, amountA);
+        tokenB.safeTransferFrom(msg.sender, pair, amountB);
+        liquidity = IUniswapV2Pair(pair).mint(to);
+    }
+
+    function addLiquidity(
+        address tokenA,
+        address tokenB,
+        uint256 amountADesired,
+        uint256 amountBDesired,
+        uint256 amountAMin,
+        uint256 amountBMin,
+        address to,
+        uint256 deadline
+    ) external ensure(deadline) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+        require(to != address(0), "RL2:ZERO_TO");
+
+        address pair;
+        (pair, amountA, amountB) = _addLiquidityTokens(tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin);
+        liquidity = _mintLiquidity(pair, tokenA, tokenB, amountA, amountB, to);
+    }
+
+    // -----------------------------
     // Add Liquidity ETH (STRUCT params => no stack-too-deep)
     // -----------------------------
 

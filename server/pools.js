@@ -47,8 +47,8 @@ function writeStore(store) {
 }
 
 function sumDepositsForPool(deposits, poolId) {
-  let totalBdagRaw = 0n;
-  let totalUsdcRaw = 0n;
+  let total0Raw = 0n;
+  let total1Raw = 0n;
   let totalLpRaw = 0n;
   let depositCount = 0;
   let lastDepositMs = 0;
@@ -56,31 +56,34 @@ function sumDepositsForPool(deposits, poolId) {
   for (const d of deposits) {
     if (!d || d.poolId !== poolId) continue;
     depositCount += 1;
-    const b = BigInt(d.bdagRaw || "0");
-    const u = BigInt(d.usdcRaw || "0");
+    const a0 = BigInt(d.amount0Raw || d.bdagRaw || "0");
+    const a1 = BigInt(d.amount1Raw || d.usdcRaw || "0");
     const lp = BigInt(d.lpRaw || "0");
     const kind = String(d.kind || "deposit");
     if (kind === "withdraw") {
-      totalBdagRaw -= b;
-      totalUsdcRaw -= u;
+      total0Raw -= a0;
+      total1Raw -= a1;
       totalLpRaw -= lp;
     } else {
-      totalBdagRaw += b;
-      totalUsdcRaw += u;
+      total0Raw += a0;
+      total1Raw += a1;
       totalLpRaw += lp;
     }
     const ts = Number(d.createdAtMs || 0);
     if (Number.isFinite(ts)) lastDepositMs = Math.max(lastDepositMs, ts);
   }
 
-  if (totalBdagRaw < 0n) totalBdagRaw = 0n;
-  if (totalUsdcRaw < 0n) totalUsdcRaw = 0n;
+  if (total0Raw < 0n) total0Raw = 0n;
+  if (total1Raw < 0n) total1Raw = 0n;
   if (totalLpRaw < 0n) totalLpRaw = 0n;
 
   return {
     depositCount,
-    totalBdagRaw: totalBdagRaw.toString(),
-    totalUsdcRaw: totalUsdcRaw.toString(),
+    total0Raw: total0Raw.toString(),
+    total1Raw: total1Raw.toString(),
+    // backwards-compat keys (old UI expected these)
+    totalBdagRaw: total0Raw.toString(),
+    totalUsdcRaw: total1Raw.toString(),
     totalLpRaw: totalLpRaw.toString(),
     lastDepositMs,
   };
@@ -134,7 +137,7 @@ function getPool(poolId) {
   return { chainId: CHAIN_ID, pool: { ...pool, ...sumDepositsForPool(store.deposits, poolId) }, deposits };
 }
 
-function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress }) {
+function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress, token0Symbol, token1Symbol, token0Address, token1Address }) {
   if (!ethers.isAddress(owner || "")) throw new Error("Invalid owner address");
 
   const store = readStore();
@@ -142,15 +145,26 @@ function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress }
   const id = makeId("pool");
   const ts = nowMs();
 
-  const cleanPair = String(pair || "").trim().slice(0, 32);
+  const cleanPair = String(pair || "").trim().slice(0, 48);
   const cleanBase = String(baseSymbol || "").trim().slice(0, 16);
   const cleanQuote = String(quoteSymbol || "").trim().slice(0, 16);
-  const cleanQuoteAddr = String(quoteAddress || "").trim();
-  const finalQuoteAddress = ethers.isAddress(cleanQuoteAddr) ? cleanQuoteAddr : "";
 
-  const finalBase = cleanBase || "BDAG";
-  const finalQuote = cleanQuote || "WUSDC";
-  const finalPair = cleanPair || `BDAG/${finalQuote}`;
+  const cleanToken0Sym = String(token0Symbol || "").trim().slice(0, 24);
+  const cleanToken1Sym = String(token1Symbol || "").trim().slice(0, 24);
+
+  const cleanToken0Addr = String(token0Address || "").trim();
+  const cleanToken1Addr = String(token1Address || "").trim();
+
+  const finalToken0Address = cleanToken0Addr === "native" ? "native" : ethers.isAddress(cleanToken0Addr) ? cleanToken0Addr : "";
+  const finalToken1Address = cleanToken1Addr === "native" ? "native" : ethers.isAddress(cleanToken1Addr) ? cleanToken1Addr : "";
+
+  // legacy optional single-field quoteAddress still accepted (for older clients)
+  const cleanQuoteAddr = String(quoteAddress || "").trim();
+  const finalQuoteAddress = cleanQuoteAddr === "native" ? "native" : ethers.isAddress(cleanQuoteAddr) ? cleanQuoteAddr : "";
+
+  const finalBase = cleanBase || (cleanToken0Sym || "TOKEN0");
+  const finalQuote = cleanQuote || (cleanToken1Sym || "TOKEN1");
+  const finalPair = cleanPair || (cleanToken0Sym && cleanToken1Sym ? `${cleanToken0Sym}/${cleanToken1Sym}` : `${finalBase}/${finalQuote}`);
 
   const pool = {
     id,
@@ -161,6 +175,10 @@ function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress }
     baseSymbol: finalBase,
     quoteSymbol: finalQuote,
     quoteAddress: finalQuoteAddress,
+    token0Symbol: cleanToken0Sym || finalBase,
+    token1Symbol: cleanToken1Sym || finalQuote,
+    token0Address: finalToken0Address,
+    token1Address: finalToken1Address || finalQuoteAddress,
     createdAtMs: ts,
     createdAtIso: new Date(ts).toISOString(),
   };
@@ -171,15 +189,15 @@ function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress }
   return pool;
 }
 
-function addDeposit({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
+function addDeposit({ poolId, wallet, bdagRaw, usdcRaw, amount0Raw, amount1Raw, lpRaw, txHash }) {
   if (!poolId) throw new Error("Missing poolId");
   if (!ethers.isAddress(wallet || "")) throw new Error("Invalid wallet address");
 
-  const b = BigInt(bdagRaw || "0");
-  const u = BigInt(usdcRaw || "0");
+  const a0 = BigInt(amount0Raw || bdagRaw || "0");
+  const a1 = BigInt(amount1Raw || usdcRaw || "0");
   const lp = BigInt(lpRaw || "0");
-  if (b <= 0n) throw new Error("Invalid BDAG amount");
-  if (u <= 0n) throw new Error("Invalid token amount");
+  if (a0 <= 0n) throw new Error("Invalid amount0");
+  if (a1 <= 0n) throw new Error("Invalid amount1");
   if (lp <= 0n) throw new Error("Invalid LP amount");
 
   if (txHash) {
@@ -199,8 +217,11 @@ function addDeposit({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
     poolId,
     wallet,
     kind: "deposit",
-    bdagRaw: b.toString(),
-    usdcRaw: u.toString(),
+    amount0Raw: a0.toString(),
+    amount1Raw: a1.toString(),
+    // backwards-compat keys
+    bdagRaw: a0.toString(),
+    usdcRaw: a1.toString(),
     lpRaw: lp.toString(),
     txHash: txHash || "",
     createdAtMs: ts,
@@ -213,16 +234,16 @@ function addDeposit({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
   return dep;
 }
 
-function addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
+function addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, amount0Raw, amount1Raw, lpRaw, txHash }) {
   if (!poolId) throw new Error("Missing poolId");
   if (!ethers.isAddress(wallet || "")) throw new Error("Invalid wallet address");
 
-  const b = BigInt(bdagRaw || "0");
-  const u = BigInt(usdcRaw || "0");
+  const a0 = BigInt(amount0Raw || bdagRaw || "0");
+  const a1 = BigInt(amount1Raw || usdcRaw || "0");
   const lp = BigInt(lpRaw || "0");
-  if (b < 0n) throw new Error("Invalid BDAG amount");
-  if (u < 0n) throw new Error("Invalid token amount");
-  if (b === 0n && u === 0n) throw new Error("Invalid withdrawal amount");
+  if (a0 < 0n) throw new Error("Invalid amount0");
+  if (a1 < 0n) throw new Error("Invalid amount1");
+  if (a0 === 0n && a1 === 0n) throw new Error("Invalid withdrawal amount");
   if (lp <= 0n) throw new Error("Invalid LP amount");
 
   if (txHash) {
@@ -242,8 +263,11 @@ function addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
     poolId,
     wallet,
     kind: "withdraw",
-    bdagRaw: b.toString(),
-    usdcRaw: u.toString(),
+    amount0Raw: a0.toString(),
+    amount1Raw: a1.toString(),
+    // backwards-compat keys
+    bdagRaw: a0.toString(),
+    usdcRaw: a1.toString(),
     lpRaw: lp.toString(),
     txHash: txHash || "",
     createdAtMs: ts,

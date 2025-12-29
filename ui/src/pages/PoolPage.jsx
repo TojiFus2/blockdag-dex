@@ -9,7 +9,10 @@ import { TOKENS_1043 } from "../lib/tokens_1043";
 const CHAIN_ID = 1043;
 const MAIN_POOL_ID = "__main__";
 
-const FACTORY_ABI = ["function getPair(address tokenA, address tokenB) external view returns (address)"];
+const FACTORY_ABI = [
+  "function getPair(address tokenA, address tokenB) external view returns (address)",
+  "function createPair(address tokenA, address tokenB) external returns (address pair)",
+];
 
 const PAIR_ABI = [
   "event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to)",
@@ -20,6 +23,7 @@ const PAIR_ABI = [
   "function totalSupply() external view returns (uint256)",
   "function balanceOf(address owner) external view returns (uint256)",
   "function transfer(address to, uint256 value) external returns (bool)",
+  "function mint(address to) external returns (uint256 liquidity)",
   "function burn(address to) external returns (uint256 amount0, uint256 amount1)",
 ];
 
@@ -28,6 +32,7 @@ const ERC20_ABI = [
   "function name() external view returns (string)",
   "function decimals() external view returns (uint8)",
   "function balanceOf(address owner) external view returns (uint256)",
+  "function transfer(address to, uint256 value) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function approve(address spender, uint256 value) external returns (bool)",
 ];
@@ -37,12 +42,14 @@ const WETH_ABI = ["function withdraw(uint256) external"];
 const ROUTER_ABI = [
   "function WETH() external view returns (address)",
   "function factory() external view returns (address)",
+  "function addLiquidity(address tokenA,address tokenB,uint256 amountADesired,uint256 amountBDesired,uint256 amountAMin,uint256 amountBMin,address to,uint256 deadline) external returns (uint256 amountA,uint256 amountB,uint256 liquidity)",
   "function addLiquidityETH((address token,uint256 amountTokenDesired,uint256 amountTokenMin,uint256 amountETHMin,address to,uint256 deadline) p) payable returns (uint256 amountToken,uint256 amountETH,uint256 liquidity)",
 ];
 
 // Testnet is flaky on estimateGas. Force high gas limits for demo.
 const GAS = {
   APPROVE: 600_000n,
+  TRANSFER: 600_000n,
   LIQ: 8_000_000n,
   REMOVE: 8_000_000n,
 };
@@ -105,7 +112,7 @@ function normalizeImportedTokens(list) {
 function normalizePairKey(pair) {
   const raw = String(pair || "").trim();
   if (!raw) return "";
-  return raw.replace(/^WBDAG\\//i, "BDAG/").toLowerCase();
+  return raw.replace(/^WBDAG\//i, "BDAG/").toLowerCase();
 }
 
 function isZeroAddr(a) {
@@ -240,19 +247,16 @@ export default function PoolPage() {
   const [routerFactoryAddr, setRouterFactoryAddr] = useState("");
   const [wrappedAddr, setWrappedAddr] = useState("");
 
-  const [wusdcDecimals, setWusdcDecimals] = useState(6);
-
   const [pairAddr, setPairAddr] = useState("");
-  const [resWbdagRaw, setResWbdagRaw] = useState(0n);
-  const [resUsdcRaw, setResUsdcRaw] = useState(0n);
+  const [resToken1Raw, setResToken1Raw] = useState(0n);
+  const [resToken2Raw, setResToken2Raw] = useState(0n);
   const [lpTotalSupplyRaw, setLpTotalSupplyRaw] = useState(0n);
   const [userLpRaw, setUserLpRaw] = useState(0n);
 
   const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const [addBdag, setAddBdag] = useState("0.1");
-  const [addUsdc, setAddUsdc] = useState("");
-  const [addLastEdited, setAddLastEdited] = useState("bdag"); // bdag|usdc
+  const [addAmt1, setAddAmt1] = useState("0.1");
+  const [addAmt2, setAddAmt2] = useState("");
   const [addStatus, setAddStatus] = useState("Idle");
   const [addTx, setAddTx] = useState("");
   const [addError, setAddError] = useState("");
@@ -269,16 +273,15 @@ export default function PoolPage() {
   const [pools, setPools] = useState([]);
   const [expandedPoolId, setExpandedPoolId] = useState("");
 
-  const [createBdag, setCreateBdag] = useState("0.1");
-  const [createUsdc, setCreateUsdc] = useState("");
-  const [createLastEdited, setCreateLastEdited] = useState("bdag"); // bdag|usdc
+  const [createAmt1, setCreateAmt1] = useState("0.1");
+  const [createAmt2, setCreateAmt2] = useState("");
   const [createPoolStatus, setCreatePoolStatus] = useState("Idle");
   const [createPoolError, setCreatePoolError] = useState("");
   const [createPoolTx, setCreatePoolTx] = useState("");
+  const [createPoolPairAddr, setCreatePoolPairAddr] = useState("");
 
-  const [poolAddBdag, setPoolAddBdag] = useState("0.1");
-  const [poolAddUsdc, setPoolAddUsdc] = useState("");
-  const [poolLastEdited, setPoolLastEdited] = useState("bdag"); // bdag|usdc
+  const [poolAddAmt1, setPoolAddAmt1] = useState("0.1");
+  const [poolAddAmt2, setPoolAddAmt2] = useState("");
   const [poolDepositStatus, setPoolDepositStatus] = useState("Idle");
   const [poolDepositError, setPoolDepositError] = useState("");
   const [poolDepositTx, setPoolDepositTx] = useState("");
@@ -351,30 +354,31 @@ export default function PoolPage() {
 
   const token1IsNative = !!token1Meta?.isNative;
   const token2IsNative = !!token2Meta?.isNative;
-  const validBdagPair = token1IsNative !== token2IsNative;
+  const sameTokenSelected = useMemo(() => {
+    if (!token1Addr || !token2Addr) return false;
+    return sameAddr(token1Addr, token2Addr);
+  }, [token1Addr, token2Addr]);
 
-  const quoteToken = useMemo(() => {
-    if (!validBdagPair) return null;
-    return token1IsNative ? token2Meta : token1Meta;
-  }, [validBdagPair, token1IsNative, token1Meta, token2Meta]);
+  const bothNativeSelected = token1IsNative && token2IsNative;
+  const hasNativeSelected = token1IsNative || token2IsNative;
 
-  const wusdcAddr = useMemo(() => {
-    const addr = String(quoteToken?.address || "").trim();
-    if (!addr) return null;
-    if (!ethers.isAddress(addr)) return null;
-    return addr;
-  }, [quoteToken]);
+  const selectedPairKey = useMemo(() => {
+    const a = String(token1Meta?.symbol || "").trim();
+    const b = String(token2Meta?.symbol || "").trim();
+    if (!a || !b) return "";
+    return `${a}/${b}`;
+  }, [token1Meta, token2Meta]);
 
-  const quoteSymbol = useMemo(() => quoteToken?.symbol || "", [quoteToken]);
-  const selectedPairKey = useMemo(() => (quoteSymbol ? `BDAG/${quoteSymbol}` : ""), [quoteSymbol]);
+  const token1Decimals = useMemo(() => (token1IsNative ? 18 : Number(token1Meta?.decimals ?? 18)), [token1IsNative, token1Meta]);
+  const token2Decimals = useMemo(() => (token2IsNative ? 18 : Number(token2Meta?.decimals ?? 18)), [token2IsNative, token2Meta]);
 
   const isSupportedChain = chainId === CHAIN_ID;
 
-  useEffect(() => {
-    // keep decimals synced if token list changes at runtime (e.g. via env var)
-    if (!quoteToken) return;
-    setWusdcDecimals(Number(quoteToken.decimals ?? 6));
-  }, [quoteToken]);
+  function resolveOnchainAddr(addr, isNative) {
+    if (!addr) return "";
+    if (isNative) return wrappedAddr || "";
+    return addr;
+  }
 
   function closeTokenModal() {
     setIsTokenModalOpen(false);
@@ -537,34 +541,14 @@ export default function PoolPage() {
 
   const factoryAddr = routerFactoryAddr || dep?.factory || "";
 
-  // Read quote token decimals from chain (best-effort)
-  useEffect(() => {
-    if (!isSupportedChain) return;
-    if (!walletOk) return;
-    if (!wusdcAddr) return;
-
-    let canceled = false;
-
-    (async () => {
-      try {
-        const provider = await getBrowserProvider();
-        const token = new ethers.Contract(wusdcAddr, ERC20_ABI, provider);
-        const d = await retryView(() => token.decimals());
-        if (!canceled) setWusdcDecimals(Number(d));
-      } catch {}
-    })();
-
-    return () => {
-      canceled = true;
-    };
-  }, [isSupportedChain, walletOk, wusdcAddr]);
-
   // Load pair + reserves + LP balances
   useEffect(() => {
     if (!isSupportedChain) return;
     if (!factoryAddr) return;
-    if (!wrappedAddr) return;
-    if (!wusdcAddr) return;
+    if (!token1Addr || !token2Addr) return;
+    if (sameTokenSelected) return;
+    if (bothNativeSelected) return;
+    if ((token1IsNative || token2IsNative) && !wrappedAddr) return;
 
     let canceled = false;
 
@@ -575,14 +559,29 @@ export default function PoolPage() {
       try {
         const provider = await getBrowserProvider();
         const factory = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
-        const p = await retryView(() => factory.getPair(wrappedAddr, wusdcAddr));
+
+        const a = resolveOnchainAddr(token1Addr, token1IsNative);
+        const b = resolveOnchainAddr(token2Addr, token2IsNative);
+        if (!a || !b || sameAddr(a, b)) {
+          if (!canceled) {
+            setPairAddr("");
+            setResToken1Raw(0n);
+            setResToken2Raw(0n);
+            setLpTotalSupplyRaw(0n);
+            setUserLpRaw(0n);
+            setPageStatus("Ready");
+          }
+          return;
+        }
+
+        const p = await retryView(() => factory.getPair(a, b));
 
         if (canceled) return;
         setPairAddr(p);
 
         if (isZeroAddr(p)) {
-          setResWbdagRaw(0n);
-          setResUsdcRaw(0n);
+          setResToken1Raw(0n);
+          setResToken2Raw(0n);
           setLpTotalSupplyRaw(0n);
           setUserLpRaw(0n);
           setPageStatus("Ready");
@@ -601,19 +600,19 @@ export default function PoolPage() {
         const r0 = rs.reserve0 ?? rs[0] ?? 0n;
         const r1 = rs.reserve1 ?? rs[1] ?? 0n;
 
-        let rw = 0n;
-        let ru = 0n;
-        if (sameAddr(t0, wrappedAddr) && sameAddr(t1, wusdcAddr)) {
-          rw = r0;
-          ru = r1;
-        } else if (sameAddr(t1, wrappedAddr) && sameAddr(t0, wusdcAddr)) {
-          rw = r1;
-          ru = r0;
+        let ra = 0n;
+        let rb = 0n;
+        if (sameAddr(t0, a) && sameAddr(t1, b)) {
+          ra = r0;
+          rb = r1;
+        } else if (sameAddr(t1, a) && sameAddr(t0, b)) {
+          ra = r1;
+          rb = r0;
         }
 
         if (!canceled) {
-          setResWbdagRaw(rw);
-          setResUsdcRaw(ru);
+          setResToken1Raw(ra);
+          setResToken2Raw(rb);
           setLpTotalSupplyRaw(ts ?? 0n);
           setUserLpRaw(ulp ?? 0n);
           setPageStatus("Ready");
@@ -629,96 +628,53 @@ export default function PoolPage() {
     return () => {
       canceled = true;
     };
-  }, [account, isSupportedChain, factoryAddr, wrappedAddr, wusdcAddr, refreshNonce, pendingTx]);
+  }, [
+    account,
+    isSupportedChain,
+    factoryAddr,
+    token1Addr,
+    token2Addr,
+    token1IsNative,
+    token2IsNative,
+    wrappedAddr,
+    sameTokenSelected,
+    bothNativeSelected,
+    refreshNonce,
+    pendingTx,
+  ]);
 
   const poolExists = !!pairAddr && !isZeroAddr(pairAddr);
-  const reservesNonZero = resWbdagRaw > 0n && resUsdcRaw > 0n;
-  const isAutoQuote = false;
 
-  const addBdagInputRaw = useMemo(() => parseUnitsSafe(addBdag, 18) ?? 0n, [addBdag]);
-  const addUsdcInputRaw = useMemo(() => parseUnitsSafe(addUsdc, wusdcDecimals) ?? 0n, [addUsdc, wusdcDecimals]);
+  const addAmt1Raw = useMemo(() => parseUnitsSafe(addAmt1, token1Decimals) ?? 0n, [addAmt1, token1Decimals]);
+  const addAmt2Raw = useMemo(() => parseUnitsSafe(addAmt2, token2Decimals) ?? 0n, [addAmt2, token2Decimals]);
 
-  const addBdagRaw = useMemo(() => {
-    if (!isAutoQuote) return addBdagInputRaw;
-    if (addLastEdited === "usdc") return calcRequiredBdag(addUsdcInputRaw, resUsdcRaw, resWbdagRaw);
-    return addBdagInputRaw;
-  }, [isAutoQuote, addLastEdited, addBdagInputRaw, addUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
+  const createAmt1Raw = useMemo(() => parseUnitsSafe(createAmt1, token1Decimals) ?? 0n, [createAmt1, token1Decimals]);
+  const createAmt2Raw = useMemo(() => parseUnitsSafe(createAmt2, token2Decimals) ?? 0n, [createAmt2, token2Decimals]);
 
-  const addUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return addUsdcInputRaw;
-    if (addLastEdited === "bdag") return calcRequiredUsdc(addBdagInputRaw, resUsdcRaw, resWbdagRaw);
-    return addUsdcInputRaw;
-  }, [isAutoQuote, addLastEdited, addBdagInputRaw, addUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
+  const poolAddAmt1Raw = useMemo(() => parseUnitsSafe(poolAddAmt1, token1Decimals) ?? 0n, [poolAddAmt1, token1Decimals]);
+  const poolAddAmt2Raw = useMemo(() => parseUnitsSafe(poolAddAmt2, token2Decimals) ?? 0n, [poolAddAmt2, token2Decimals]);
 
-  const addBdagDisplay = useMemo(() => {
-    if (isAutoQuote && addLastEdited === "usdc") return formatUnitsTrim(addBdagRaw, 18, 18);
-    return addBdag;
-  }, [isAutoQuote, addLastEdited, addBdagRaw, addBdag]);
-
-  const addUsdcDisplay = useMemo(() => {
-    if (isAutoQuote && addLastEdited === "bdag") return formatUnitsTrim(addUsdcRaw, wusdcDecimals, 6);
-    return addUsdc;
-  }, [isAutoQuote, addLastEdited, addUsdcRaw, addUsdc, wusdcDecimals]);
-
-  const priceUsdcPerBdagText = useMemo(() => {
-    const p = calcPriceUsdcPerBdagRaw(resUsdcRaw, resWbdagRaw);
-    return formatUnitsTrim(p, wusdcDecimals, 6);
-  }, [resUsdcRaw, resWbdagRaw, wusdcDecimals]);
+  const price2Per1Text = useMemo(() => {
+    if (resToken1Raw <= 0n || resToken2Raw <= 0n) return "\u2014";
+    try {
+      const pRaw = (resToken2Raw * 10n ** BigInt(token1Decimals)) / resToken1Raw;
+      return formatUnitsTrim(pRaw, token2Decimals, 6);
+    } catch {
+      return "\u2014";
+    }
+  }, [resToken1Raw, resToken2Raw, token1Decimals, token2Decimals]);
 
   const lpTotalText = useMemo(() => formatUnitsTrim(lpTotalSupplyRaw, 18, 18), [lpTotalSupplyRaw]);
   const userLpText = useMemo(() => formatUnitsTrim(userLpRaw, 18, 18), [userLpRaw]);
 
   const isMainOpen = expandedPoolId === MAIN_POOL_ID;
 
-  const createBdagInputRaw = useMemo(() => parseUnitsSafe(createBdag, 18) ?? 0n, [createBdag]);
-  const createUsdcInputRaw = useMemo(() => parseUnitsSafe(createUsdc, wusdcDecimals) ?? 0n, [createUsdc, wusdcDecimals]);
-
-  const createBdagRaw = useMemo(() => {
-    if (!isAutoQuote) return createBdagInputRaw;
-    if (createLastEdited === "usdc") return calcRequiredBdag(createUsdcInputRaw, resUsdcRaw, resWbdagRaw);
-    return createBdagInputRaw;
-  }, [isAutoQuote, createLastEdited, createBdagInputRaw, createUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
-
-  const createUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return createUsdcInputRaw;
-    if (createLastEdited === "bdag") return calcRequiredUsdc(createBdagInputRaw, resUsdcRaw, resWbdagRaw);
-    return createUsdcInputRaw;
-  }, [isAutoQuote, createLastEdited, createBdagInputRaw, createUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
-
-  const createBdagDisplay = useMemo(() => {
-    if (isAutoQuote && createLastEdited === "usdc") return formatUnitsTrim(createBdagRaw, 18, 18);
-    return createBdag;
-  }, [isAutoQuote, createLastEdited, createBdagRaw, createBdag]);
-
-  const createUsdcDisplay = useMemo(() => {
-    if (isAutoQuote && createLastEdited === "bdag") return formatUnitsTrim(createUsdcRaw, wusdcDecimals, 6);
-    return createUsdc;
-  }, [isAutoQuote, createLastEdited, createUsdcRaw, createUsdc, wusdcDecimals]);
-
-  const poolAddBdagInputRaw = useMemo(() => parseUnitsSafe(poolAddBdag, 18) ?? 0n, [poolAddBdag]);
-  const poolAddUsdcInputRaw = useMemo(() => parseUnitsSafe(poolAddUsdc, wusdcDecimals) ?? 0n, [poolAddUsdc, wusdcDecimals]);
-
-  const poolAddBdagRaw = useMemo(() => {
-    if (!isAutoQuote) return poolAddBdagInputRaw;
-    if (poolLastEdited === "usdc") return calcRequiredBdag(poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw);
-    return poolAddBdagInputRaw;
-  }, [isAutoQuote, poolLastEdited, poolAddBdagInputRaw, poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
-
-  const poolAddUsdcRaw = useMemo(() => {
-    if (!isAutoQuote) return poolAddUsdcInputRaw;
-    if (poolLastEdited === "bdag") return calcRequiredUsdc(poolAddBdagInputRaw, resUsdcRaw, resWbdagRaw);
-    return poolAddUsdcInputRaw;
-  }, [isAutoQuote, poolLastEdited, poolAddBdagInputRaw, poolAddUsdcInputRaw, resUsdcRaw, resWbdagRaw]);
-
-  const poolAddBdagDisplay = useMemo(() => {
-    if (isAutoQuote && poolLastEdited === "usdc") return formatUnitsTrim(poolAddBdagRaw, 18, 18);
-    return poolAddBdag;
-  }, [isAutoQuote, poolLastEdited, poolAddBdagRaw, poolAddBdag]);
-
-  const poolAddUsdcDisplay = useMemo(() => {
-    if (isAutoQuote && poolLastEdited === "bdag") return formatUnitsTrim(poolAddUsdcRaw, wusdcDecimals, 6);
-    return poolAddUsdc;
-  }, [isAutoQuote, poolLastEdited, poolAddUsdcRaw, poolAddUsdc, wusdcDecimals]);
+  const addAmt1Display = addAmt1;
+  const addAmt2Display = addAmt2;
+  const createAmt1Display = createAmt1;
+  const createAmt2Display = createAmt2;
+  const poolAddAmt1Display = poolAddAmt1;
+  const poolAddAmt2Display = poolAddAmt2;
 
   async function refreshPools() {
     const base = getApiBase();
@@ -780,22 +736,19 @@ export default function PoolPage() {
       setCreatePoolError("Connect wallet");
       return;
     }
-    if (!validBdagPair) {
-      setCreatePoolError("Select BDAG + token (only ETH pools supported)");
-      return;
-    }
-    if (!wusdcAddr) {
-      setCreatePoolError("Select a token");
-      return;
-    }
+    if (!token1Addr || !token2Addr) return setCreatePoolError("Select two tokens");
+    if (sameTokenSelected) return setCreatePoolError("Select two different tokens");
+    if (bothNativeSelected) return setCreatePoolError("Select at least one ERC20 token");
+    if ((token1IsNative || token2IsNative) && !wrappedAddr) return setCreatePoolError("Wrapped token not loaded yet");
 
     setCreatePoolError("");
     setCreatePoolTx("");
+    setCreatePoolPairAddr("");
     setCreatePoolStatus("Idle");
 
     const addRes = await runAddLiquidity({
-      bdagRaw: createBdagRaw,
-      usdcRaw: createUsdcRaw,
+      amount1Raw: createAmt1Raw,
+      amount2Raw: createAmt2Raw,
       setStatus: setCreatePoolStatus,
       setError: setCreatePoolError,
       setTx: setCreatePoolTx,
@@ -803,8 +756,12 @@ export default function PoolPage() {
     });
 
     const txHash = addRes?.txHash || "";
+    const pairAfter = addRes?.pairAddr || "";
     const lpRaw = addRes?.lpMintedRaw ?? 0n;
+    const usedAmt1Raw = addRes?.usedAmt1Raw ?? createAmt1Raw;
+    const usedAmt2Raw = addRes?.usedAmt2Raw ?? createAmt2Raw;
     if (!txHash) return;
+    if (pairAfter && !isZeroAddr(pairAfter)) setCreatePoolPairAddr(pairAfter);
     if (lpRaw <= 0n) {
       setCreatePoolStatus("Failed");
       setCreatePoolError("LP minted not detected");
@@ -818,7 +775,17 @@ export default function PoolPage() {
       const res = await fetch(`${base}/api/pools`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: account, pair: selectedPairKey, baseSymbol: "BDAG", quoteSymbol, quoteAddress: wusdcAddr }),
+        body: JSON.stringify({
+          owner: account,
+          pair: selectedPairKey,
+          baseSymbol: token1Meta?.symbol || "",
+          quoteSymbol: token2Meta?.symbol || "",
+          quoteAddress: token2Addr,
+          token0Symbol: token1Meta?.symbol || "",
+          token1Symbol: token2Meta?.symbol || "",
+          token0Address: token1Addr,
+          token1Address: token2Addr,
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
@@ -832,8 +799,10 @@ export default function PoolPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           wallet: account,
-          bdagRaw: createBdagRaw.toString(),
-          usdcRaw: createUsdcRaw.toString(),
+          amount0Raw: usedAmt1Raw.toString(),
+          amount1Raw: usedAmt2Raw.toString(),
+          bdagRaw: usedAmt1Raw.toString(),
+          usdcRaw: usedAmt2Raw.toString(),
           lpRaw: lpRaw.toString(),
           txHash,
         }),
@@ -850,7 +819,7 @@ export default function PoolPage() {
     }
   }
 
-  async function runAddLiquidity({ bdagRaw, usdcRaw, setStatus, setError, setTx, finalizeStatus = true }) {
+  async function runAddLiquidity({ amount1Raw, amount2Raw, setStatus, setError, setTx, finalizeStatus = true }) {
     if (pendingTx) return null;
     if (!walletOk) return null;
     if (!account) {
@@ -869,21 +838,47 @@ export default function PoolPage() {
       setError("Factory not loaded");
       return null;
     }
-    if (!wrappedAddr) {
-      setError("Wrapped token not loaded");
+
+    if (!token1Addr || !token2Addr) {
+      setError("Select two tokens");
       return null;
     }
-    if (!wusdcAddr) {
-      setError("Select BDAG + token");
+    if (sameTokenSelected) {
+      setError("Select two different tokens");
+      return null;
+    }
+    if (bothNativeSelected) {
+      setError("Select at least one ERC20 token");
       return null;
     }
 
-    if (bdagRaw <= 0n) {
-      setError("Enter BDAG amount");
+    const aAddr = String(token1Addr || "").trim();
+    const bAddr = String(token2Addr || "").trim();
+    if (!aAddr || !bAddr) {
+      setError("Select two tokens");
       return null;
     }
-    if (usdcRaw <= 0n) {
-      setError(`Enter ${(quoteSymbol || "token").trim()} amount`);
+
+    if (!token1IsNative && !ethers.isAddress(aAddr)) {
+      setError("Token 1 address invalid");
+      return null;
+    }
+    if (!token2IsNative && !ethers.isAddress(bAddr)) {
+      setError("Token 2 address invalid");
+      return null;
+    }
+
+    if ((token1IsNative || token2IsNative) && !wrappedAddr) {
+      setError("Wrapped token not loaded");
+      return null;
+    }
+
+    if (!amount1Raw || amount1Raw <= 0n) {
+      setError(`Enter ${token1Meta?.symbol || "token 1"} amount`);
+      return null;
+    }
+    if (!amount2Raw || amount2Raw <= 0n) {
+      setError(`Enter ${token2Meta?.symbol || "token 2"} amount`);
       return null;
     }
 
@@ -893,34 +888,163 @@ export default function PoolPage() {
       const provider = await getBrowserProvider();
       const signer = await provider.getSigner();
       const router = new ethers.Contract(dep.router, ROUTER_ABI, signer);
-      const token = new ethers.Contract(wusdcAddr, ERC20_ABI, signer);
-
-      setStatus("Checking allowance...");
-      const allowance = await retryView(() => token.allowance(account, dep.router)).catch(() => 0n);
-      if (allowance < usdcRaw) {
-        setStatus(`Approving ${quoteSymbol || "token"}...`);
-        const txA = await token.approve(dep.router, usdcRaw, { gasLimit: GAS.APPROVE });
-        setPendingTx(txA.hash);
-        setTx(txA.hash);
-        setStatus(`Approve pending: ${txA.hash}`);
-        await txA.wait();
-        setPendingTx("");
-      }
 
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * DEADLINE_MINUTES);
 
-      setStatus("Adding liquidity...");
-      const tx = await router.addLiquidityETH(
-        {
-          token: wusdcAddr,
-          amountTokenDesired: usdcRaw,
-          amountTokenMin: 0,
-          amountETHMin: 0,
-          to: account,
-          deadline,
-        },
-        { value: bdagRaw, gasLimit: GAS.LIQ }
-      );
+      const aOnchain = resolveOnchainAddr(aAddr, token1IsNative);
+      const bOnchain = resolveOnchainAddr(bAddr, token2IsNative);
+      if (!aOnchain || !bOnchain || sameAddr(aOnchain, bOnchain)) throw new Error("Invalid pair");
+
+      let usedAmt1Raw = amount1Raw;
+      let usedAmt2Raw = amount2Raw;
+
+      let tx;
+
+      if (token1IsNative || token2IsNative) {
+        const nativeDesired = token1IsNative ? amount1Raw : amount2Raw;
+        const tokenDesired = token1IsNative ? amount2Raw : amount1Raw;
+        const tokenAddr = token1IsNative ? bAddr : aAddr;
+        const tokenSym = token1IsNative ? token2Meta?.symbol : token1Meta?.symbol;
+
+        const token = new ethers.Contract(tokenAddr, ERC20_ABI, signer);
+
+        setStatus("Checking allowance...");
+        const allowance = await retryView(() => token.allowance(account, dep.router)).catch(() => 0n);
+        if (allowance < tokenDesired) {
+          setStatus(`Approving ${tokenSym || "token"}...`);
+          const txA = await token.approve(dep.router, tokenDesired, { gasLimit: GAS.APPROVE });
+          setPendingTx(txA.hash);
+          setTx(txA.hash);
+          setStatus(`Approve pending: ${txA.hash}`);
+          await txA.wait();
+          setPendingTx("");
+        }
+
+        try {
+          const preview = await router.addLiquidityETH.staticCall(
+            { token: tokenAddr, amountTokenDesired: tokenDesired, amountTokenMin: 0, amountETHMin: 0, to: account, deadline },
+            { value: nativeDesired }
+          );
+          const usedToken = preview?.amountToken ?? preview?.[0] ?? tokenDesired;
+          const usedEth = preview?.amountETH ?? preview?.[1] ?? nativeDesired;
+          if (token1IsNative) {
+            usedAmt1Raw = usedEth;
+            usedAmt2Raw = usedToken;
+          } else {
+            usedAmt1Raw = usedToken;
+            usedAmt2Raw = usedEth;
+          }
+        } catch {}
+
+        setStatus("Adding liquidity...");
+        tx = await router.addLiquidityETH(
+          { token: tokenAddr, amountTokenDesired: tokenDesired, amountTokenMin: 0, amountETHMin: 0, to: account, deadline },
+          { value: nativeDesired, gasLimit: GAS.LIQ }
+        );
+      } else {
+        // Token/token: do it without router (works even if router lacks addLiquidity).
+        // 1) Ensure pair exists.
+        setStatus("Ensuring pair...");
+        const factory = new ethers.Contract(factoryAddr, FACTORY_ABI, signer);
+        let p = await retryView(() => factory.getPair(aOnchain, bOnchain)).catch(() => ethers.ZeroAddress);
+        if (isZeroAddr(p)) {
+          setStatus("Creating pair...");
+          const txP = await factory.createPair(aOnchain, bOnchain, { gasLimit: GAS.LIQ });
+          setPendingTx(txP.hash);
+          setTx(txP.hash);
+          setStatus(`Pending: ${txP.hash}`);
+          const rcP = await txP.wait();
+          setPendingTx("");
+          if (rcP?.status !== 1) throw new Error("createPair failed");
+          p = await retryView(() => factory.getPair(aOnchain, bOnchain));
+        }
+        if (!p || isZeroAddr(p)) throw new Error("Pair not created");
+
+        // 2) Compute optimal amounts (so we don't donate excess).
+        let amountA = amount1Raw;
+        let amountB = amount2Raw;
+
+        try {
+          const pairRO = new ethers.Contract(p, PAIR_ABI, provider);
+          const [t0, t1, rs] = await Promise.all([retryView(() => pairRO.token0()), retryView(() => pairRO.token1()), retryView(() => pairRO.getReserves())]);
+          const r0 = rs.reserve0 ?? rs[0] ?? 0n;
+          const r1 = rs.reserve1 ?? rs[1] ?? 0n;
+
+          let reserveA = 0n;
+          let reserveB = 0n;
+          if (sameAddr(t0, aOnchain) && sameAddr(t1, bOnchain)) {
+            reserveA = r0;
+            reserveB = r1;
+          } else if (sameAddr(t1, aOnchain) && sameAddr(t0, bOnchain)) {
+            reserveA = r1;
+            reserveB = r0;
+          }
+
+          if (reserveA > 0n && reserveB > 0n) {
+            const amountBOptimal = (amount1Raw * reserveB) / reserveA;
+            if (amountBOptimal > 0n && amountBOptimal <= amount2Raw) {
+              amountA = amount1Raw;
+              amountB = amountBOptimal;
+            } else {
+              const amountAOptimal = (amount2Raw * reserveA) / reserveB;
+              if (amountAOptimal > 0n) {
+                amountA = amountAOptimal;
+                amountB = amount2Raw;
+              }
+            }
+          }
+        } catch {}
+
+        usedAmt1Raw = amountA;
+        usedAmt2Raw = amountB;
+
+        // 3) Transfer tokens to pair and mint.
+        const tokenA = new ethers.Contract(aAddr, ERC20_ABI, signer);
+        const tokenB = new ethers.Contract(bAddr, ERC20_ABI, signer);
+
+        if (amountA <= 0n || amountB <= 0n) throw new Error("Amounts too small");
+
+        setStatus("Checking balances...");
+        const [balA, balB] = await Promise.all([
+          retryView(() => tokenA.balanceOf(account)).catch(() => 0n),
+          retryView(() => tokenB.balanceOf(account)).catch(() => 0n),
+        ]);
+        if (balA < amountA) throw new Error(`Insufficient ${token1Meta?.symbol || "token 1"} balance`);
+        if (balB < amountB) throw new Error(`Insufficient ${token2Meta?.symbol || "token 2"} balance`);
+
+        setStatus(`Sending ${token1Meta?.symbol || "token 1"}...`);
+        const tx1 = await tokenA.transfer(p, amountA, { gasLimit: GAS.TRANSFER });
+        setPendingTx(tx1.hash);
+        setTx(tx1.hash);
+        setStatus(`Pending: ${tx1.hash}`);
+        const rc1 = await tx1.wait();
+        setPendingTx("");
+        if (rc1?.status !== 1) throw new Error("Token 1 transfer failed");
+
+        setStatus(`Sending ${token2Meta?.symbol || "token 2"}...`);
+        const tx2 = await tokenB.transfer(p, amountB, { gasLimit: GAS.TRANSFER });
+        setPendingTx(tx2.hash);
+        setTx(tx2.hash);
+        setStatus(`Pending: ${tx2.hash}`);
+        const rc2 = await tx2.wait();
+        setPendingTx("");
+        if (rc2?.status !== 1) throw new Error("Token 2 transfer failed");
+
+        setStatus("Minting LP...");
+        const pair = new ethers.Contract(p, PAIR_ABI, signer);
+        tx = await pair.mint(account, { gasLimit: GAS.LIQ });
+        setPendingTx(tx.hash);
+        setTx(tx.hash);
+        setStatus(`Pending: ${tx.hash}`);
+        const rcM = await tx.wait();
+        setPendingTx("");
+        if (rcM?.status !== 1) throw new Error("Mint failed");
+
+        const lpMintedRaw = extractMintedLpFromReceipt({ receipt: rcM, pairAddress: p, to: account });
+        if (finalizeStatus) setStatus("Success");
+        setRefreshNonce((n) => n + 1);
+        return { txHash: tx.hash, receipt: rcM, pairAddr: p, lpMintedRaw, usedAmt1Raw, usedAmt2Raw };
+      }
 
       setPendingTx(tx.hash);
       setTx(tx.hash);
@@ -936,12 +1060,12 @@ export default function PoolPage() {
       let pairAfter = pairAddr;
       try {
         const factory = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
-        const p = await retryView(() => factory.getPair(wrappedAddr, wusdcAddr));
+        const p = await retryView(() => factory.getPair(aOnchain, bOnchain));
         if (p && !isZeroAddr(p)) pairAfter = p;
       } catch {}
 
       const lpMintedRaw = extractMintedLpFromReceipt({ receipt: rc, pairAddress: pairAfter, to: account });
-      return { txHash: tx.hash, receipt: rc, pairAddr: pairAfter, lpMintedRaw };
+      return { txHash: tx.hash, receipt: rc, pairAddr: pairAfter, lpMintedRaw, usedAmt1Raw, usedAmt2Raw };
     } catch (e) {
       setPendingTx("");
       setStatus("Failed");
@@ -956,36 +1080,61 @@ export default function PoolPage() {
     setAddTx("");
     setAddStatus("Idle");
     await runAddLiquidity({
-      bdagRaw: addBdagRaw,
-      usdcRaw: addUsdcRaw,
+      amount1Raw: addAmt1Raw,
+      amount2Raw: addAmt2Raw,
       setStatus: setAddStatus,
       setError: setAddError,
       setTx: setAddTx,
     });
   }
 
-  async function onDepositToPool(poolId, poolPair = "") {
+  async function onDepositToPool(pool) {
     if (pendingTx) return;
     if (!walletOk) return;
     if (!account) {
       setPoolDepositError("Connect wallet");
       return;
     }
+    const poolId = String(pool?.id || "");
+    const poolPair = String(pool?.pair || "");
     if (!poolId) {
       setPoolDepositError("Open a pool");
       return;
     }
-    if (poolPair && normalizePairKey(poolPair) !== normalizePairKey(selectedPairKey)) {
-      setPoolDepositError(`This pool is ${poolPair}. Switch pair to match before adding liquidity.`);
-      return;
-    }
-    if (!validBdagPair) {
-      setPoolDepositError("Select BDAG + token (only ETH pools supported)");
-      return;
-    }
-    if (!wusdcAddr) {
-      setPoolDepositError("Select a token");
-      return;
+    if (!token1Addr || !token2Addr) return setPoolDepositError("Select two tokens");
+    if (sameTokenSelected) return setPoolDepositError("Select two different tokens");
+    if (bothNativeSelected) return setPoolDepositError("Select at least one ERC20 token");
+    if ((token1IsNative || token2IsNative) && !wrappedAddr) return setPoolDepositError("Wrapped token not loaded yet");
+
+    // If the pool includes token addresses, match by addresses (order-insensitive).
+    const poolToken0Address = String(pool?.token0Address || "").trim();
+    const poolToken1Address = String(pool?.token1Address || "").trim();
+
+    if (poolToken0Address && poolToken1Address) {
+      const sa = resolveOnchainAddr(token1Addr, token1IsNative);
+      const sb = resolveOnchainAddr(token2Addr, token2IsNative);
+      const pa = resolveOnchainAddr(poolToken0Address, poolToken0Address === "native");
+      const pb = resolveOnchainAddr(poolToken1Address, poolToken1Address === "native");
+
+      const ok =
+        !!sa &&
+        !!sb &&
+        !!pa &&
+        !!pb &&
+        ((sameAddr(sa, pa) && sameAddr(sb, pb)) || (sameAddr(sa, pb) && sameAddr(sb, pa)));
+
+      if (!ok) {
+        setPoolDepositError(`This pool is ${poolPair || "a different pair"}. Select the same pair before adding liquidity.`);
+        return;
+      }
+    } else if (poolPair) {
+      const sel = normalizePairKey(selectedPairKey);
+      const poolK = normalizePairKey(poolPair);
+      const selRev = sel.includes("/") ? sel.split("/").reverse().join("/") : sel;
+      if (poolK !== sel && poolK !== selRev) {
+        setPoolDepositError(`This pool is ${poolPair}. Select the same pair before adding liquidity.`);
+        return;
+      }
     }
 
     setPoolDepositError("");
@@ -995,8 +1144,8 @@ export default function PoolPage() {
     const base = getApiBase();
 
     const addRes = await runAddLiquidity({
-      bdagRaw: poolAddBdagRaw,
-      usdcRaw: poolAddUsdcRaw,
+      amount1Raw: poolAddAmt1Raw,
+      amount2Raw: poolAddAmt2Raw,
       setStatus: setPoolDepositStatus,
       setError: setPoolDepositError,
       setTx: setPoolDepositTx,
@@ -1005,6 +1154,8 @@ export default function PoolPage() {
 
     const txHash = addRes?.txHash || "";
     const lpRaw = addRes?.lpMintedRaw ?? 0n;
+    const usedAmt1Raw = addRes?.usedAmt1Raw ?? poolAddAmt1Raw;
+    const usedAmt2Raw = addRes?.usedAmt2Raw ?? poolAddAmt2Raw;
     if (!txHash) return;
     if (lpRaw <= 0n) {
       setPoolDepositStatus("Failed");
@@ -1014,13 +1165,30 @@ export default function PoolPage() {
 
     try {
       setPoolDepositStatus("Recording liquidity...");
+
+      // Record in pool token order (pool.token0/token1), not UI-selected order.
+      let recAmt0Raw = usedAmt1Raw;
+      let recAmt1Raw = usedAmt2Raw;
+      if (poolToken0Address && poolToken1Address) {
+        const sa = resolveOnchainAddr(token1Addr, token1IsNative);
+        const sb = resolveOnchainAddr(token2Addr, token2IsNative);
+        const pa = resolveOnchainAddr(poolToken0Address, poolToken0Address === "native");
+        const pb = resolveOnchainAddr(poolToken1Address, poolToken1Address === "native");
+        if (sa && sb && pa && pb && sameAddr(sa, pb) && sameAddr(sb, pa)) {
+          recAmt0Raw = usedAmt2Raw;
+          recAmt1Raw = usedAmt1Raw;
+        }
+      }
+
       const res = await fetch(`${base}/api/pools/${encodeURIComponent(poolId)}/deposits`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           wallet: account,
-          bdagRaw: poolAddBdagRaw.toString(),
-          usdcRaw: poolAddUsdcRaw.toString(),
+          amount0Raw: recAmt0Raw.toString(),
+          amount1Raw: recAmt1Raw.toString(),
+          bdagRaw: recAmt0Raw.toString(),
+          usdcRaw: recAmt1Raw.toString(),
           lpRaw: lpRaw.toString(),
           txHash,
         }),
@@ -1052,9 +1220,32 @@ export default function PoolPage() {
     if (recordPoolId) {
       const rec = (pools || []).find((x) => x && x.id === recordPoolId);
       const recPair = String(rec?.pair || "");
-      if (recPair && normalizePairKey(recPair) !== normalizePairKey(selectedPairKey)) {
-        return setRemoveError(`This pool is ${recPair}. Switch pair to match before removing liquidity.`);
+
+      const recToken0Address = String(rec?.token0Address || "").trim();
+      const recToken1Address = String(rec?.token1Address || "").trim();
+      if (recToken0Address && recToken1Address) {
+        const sa = resolveOnchainAddr(token1Addr, token1IsNative);
+        const sb = resolveOnchainAddr(token2Addr, token2IsNative);
+        const pa = resolveOnchainAddr(recToken0Address, recToken0Address === "native");
+        const pb = resolveOnchainAddr(recToken1Address, recToken1Address === "native");
+
+        const ok =
+          !!sa &&
+          !!sb &&
+          !!pa &&
+          !!pb &&
+          ((sameAddr(sa, pa) && sameAddr(sb, pb)) || (sameAddr(sa, pb) && sameAddr(sb, pa)));
+
+        if (!ok) return setRemoveError(`This pool is ${recPair || "a different pair"}. Select the same pair before removing liquidity.`);
+      } else if (recPair) {
+        const sel = normalizePairKey(selectedPairKey);
+        const recK = normalizePairKey(recPair);
+        const selRev = sel.includes("/") ? sel.split("/").reverse().join("/") : sel;
+        if (recK !== sel && recK !== selRev) {
+          return setRemoveError(`This pool is ${recPair}. Select the same pair before removing liquidity.`);
+        }
       }
+
       const poolUserLpRaw = safeBigInt(rec?.userLpRaw);
       maxAllowed = poolUserLpRaw < userLpRaw ? poolUserLpRaw : userLpRaw;
       if (maxAllowed <= 0n) return setRemoveError("No LP in this pool");
@@ -1111,36 +1302,66 @@ export default function PoolPage() {
         }
       } catch {}
 
-      let bdagOut = 0n;
-      let usdcOut = 0n;
-      if (sameAddr(t0, wrappedAddr) && sameAddr(t1, wusdcAddr)) {
-        bdagOut = amount0;
-        usdcOut = amount1;
-      } else if (sameAddr(t1, wrappedAddr) && sameAddr(t0, wusdcAddr)) {
-        bdagOut = amount1;
-        usdcOut = amount0;
-      }
+      // Map burn outputs to the currently-selected token order (token1/token2)
+      const a = resolveOnchainAddr(token1Addr, token1IsNative);
+      const b = resolveOnchainAddr(token2Addr, token2IsNative);
 
-      // Convert WBDAG -> BDAG so the user gets native back (router-lite doesn't have removeLiquidityETH).
-      if (validBdagPair && bdagOut > 0n && wrappedAddr && !isZeroAddr(wrappedAddr)) {
-        try {
-          const weth = new ethers.Contract(wrappedAddr, WETH_ABI, signer);
-          setRemoveStatus("Unwrapping BDAG...");
-          const txW = await weth.withdraw(bdagOut, { gasLimit: GAS.REMOVE });
-          setPendingTx(txW.hash);
-          setRemoveTx(txW.hash);
-          setRemoveStatus(`Pending: ${txW.hash}`);
-          const rcW = await txW.wait();
-          setPendingTx("");
-          if (rcW?.status !== 1) throw new Error("Unwrap failed");
-        } catch (e) {
-          setPendingTx("");
-          setRemoveError(`Unwrap failed (you received WBDAG): ${toErr(e)}`);
+      let out1 = 0n;
+      let out2 = 0n;
+      if (a && b) {
+        if (sameAddr(t0, a) && sameAddr(t1, b)) {
+          out1 = amount0;
+          out2 = amount1;
+        } else if (sameAddr(t1, a) && sameAddr(t0, b)) {
+          out1 = amount1;
+          out2 = amount0;
         }
       }
 
-      if (recordPoolId && (bdagOut > 0n || usdcOut > 0n)) {
+      // Convert wrapped native -> native (only if user selected a native token).
+      if ((token1IsNative || token2IsNative) && wrappedAddr && !isZeroAddr(wrappedAddr)) {
+        const wrappedOut = sameAddr(t0, wrappedAddr) ? amount0 : sameAddr(t1, wrappedAddr) ? amount1 : 0n;
+        if (wrappedOut > 0n) {
+          try {
+            const weth = new ethers.Contract(wrappedAddr, WETH_ABI, signer);
+            setRemoveStatus("Unwrapping native...");
+            const txW = await weth.withdraw(wrappedOut, { gasLimit: GAS.REMOVE });
+            setPendingTx(txW.hash);
+            setRemoveTx(txW.hash);
+            setRemoveStatus(`Pending: ${txW.hash}`);
+            const rcW = await txW.wait();
+            setPendingTx("");
+            if (rcW?.status !== 1) throw new Error("Unwrap failed");
+          } catch (e) {
+            setPendingTx("");
+            setRemoveError(`Unwrap failed (you received wrapped): ${toErr(e)}`);
+          }
+        }
+      }
+
+      if (recordPoolId && (out1 > 0n || out2 > 0n)) {
         try {
+          // Record in pool token order, not UI-selected order.
+          let recOut0 = out1;
+          let recOut1 = out2;
+
+          const rec = (pools || []).find((x) => x && x.id === recordPoolId);
+          const recToken0Address = String(rec?.token0Address || "").trim();
+          const recToken1Address = String(rec?.token1Address || "").trim();
+          if (recToken0Address && recToken1Address) {
+            const pa = resolveOnchainAddr(recToken0Address, recToken0Address === "native");
+            const pb = resolveOnchainAddr(recToken1Address, recToken1Address === "native");
+            if (pa && pb) {
+              if (sameAddr(t0, pa) && sameAddr(t1, pb)) {
+                recOut0 = amount0;
+                recOut1 = amount1;
+              } else if (sameAddr(t1, pa) && sameAddr(t0, pb)) {
+                recOut0 = amount1;
+                recOut1 = amount0;
+              }
+            }
+          }
+
           setRemoveStatus("Recording withdrawal...");
           const base = getApiBase();
           await fetch(`${base}/api/pools/${encodeURIComponent(recordPoolId)}/withdrawals`, {
@@ -1148,8 +1369,10 @@ export default function PoolPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               wallet: account,
-              bdagRaw: bdagOut.toString(),
-              usdcRaw: usdcOut.toString(),
+              amount0Raw: recOut0.toString(),
+              amount1Raw: recOut1.toString(),
+              bdagRaw: recOut0.toString(),
+              usdcRaw: recOut1.toString(),
               lpRaw: lpRaw.toString(),
               txHash: tx2.hash,
             }),
@@ -1252,9 +1475,17 @@ export default function PoolPage() {
                   <div className="swapBoxTitle">Create pool</div>
                   <div className="swapTokenPill">{selectedPairKey || "\u2014"}</div>
                  </div>
-                {!validBdagPair ? (
+                {sameTokenSelected ? (
                   <div className="small bad" style={{ marginTop: 8, opacity: 0.95 }}>
-                    Only pools with BDAG + a token are supported.
+                    Select two different tokens.
+                  </div>
+                ) : bothNativeSelected ? (
+                  <div className="small bad" style={{ marginTop: 8, opacity: 0.95 }}>
+                    Select at least one ERC20 token.
+                  </div>
+                ) : (token1IsNative || token2IsNative) && !wrappedAddr ? (
+                  <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+                    Loading wrapped token...
                   </div>
                 ) : (
                   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
@@ -1271,20 +1502,13 @@ export default function PoolPage() {
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={validBdagPair ? (token1IsNative ? createBdagDisplay : createUsdcDisplay) : ""}
+                    value={createAmt1Display}
                     onChange={(e) => {
-                      if (!validBdagPair) return;
-                      if (token1IsNative) {
-                        setCreateLastEdited("bdag");
-                        setCreateBdag(sanitizeAmountInput(e.target.value, 18));
-                      } else {
-                        setCreateLastEdited("usdc");
-                        setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                      }
+                      setCreateAmt1(sanitizeAmountInput(e.target.value, token1Decimals));
                     }}
                     placeholder="0.0"
                     inputMode="decimal"
-                    disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
+                    disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected}
                   />
                 </div>
               </div>
@@ -1297,20 +1521,13 @@ export default function PoolPage() {
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={validBdagPair ? (token2IsNative ? createBdagDisplay : createUsdcDisplay) : ""}
+                    value={createAmt2Display}
                     onChange={(e) => {
-                      if (!validBdagPair) return;
-                      if (token2IsNative) {
-                        setCreateLastEdited("bdag");
-                        setCreateBdag(sanitizeAmountInput(e.target.value, 18));
-                      } else {
-                        setCreateLastEdited("usdc");
-                        setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                      }
+                      setCreateAmt2(sanitizeAmountInput(e.target.value, token2Decimals));
                     }}
                     placeholder="0.0"
                     inputMode="decimal"
-                    disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
+                    disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected}
                   />
                 </div>
               </div>
@@ -1318,7 +1535,14 @@ export default function PoolPage() {
               <button
                 type="button"
                 className="btn swapCta"
-                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr}
+                disabled={
+                  !!pendingTx ||
+                  !isSupportedChain ||
+                  !dep?.router ||
+                  sameTokenSelected ||
+                  bothNativeSelected ||
+                  ((token1IsNative || token2IsNative) && !wrappedAddr)
+                }
                 onClick={onCreatePoolWithDeposit}
               >
                 {pendingTx ? "Pending transaction..." : "Create pool"}
@@ -1330,6 +1554,11 @@ export default function PoolPage() {
                   {!!createPoolTx && (
                     <div className="small" style={{ opacity: 0.9, marginTop: 6, wordBreak: "break-word" }}>
                       Tx: {createPoolTx}
+                    </div>
+                  )}
+                  {!!createPoolPairAddr && (
+                    <div className="small" style={{ opacity: 0.9, marginTop: 6, wordBreak: "break-word" }}>
+                      Pair: {createPoolPairAddr}
                     </div>
                   )}
                 </div>
@@ -1373,23 +1602,23 @@ export default function PoolPage() {
                 <div className="small" style={{ marginTop: 6 }}>
                   Reserves:{" "}
                   <span className="kv">
-                    {!validBdagPair ? (
+                    {sameTokenSelected || bothNativeSelected ? (
                       "\u2014"
-                    ) : token1IsNative ? (
-                      <>
-                        {formatUnitsTrim(resWbdagRaw, 18, 6)} {token1Meta?.symbol || "BDAG"} + {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)}{" "}
-                        {token2Meta?.symbol || quoteSymbol}
-                      </>
                     ) : (
                       <>
-                        {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)} {token1Meta?.symbol || quoteSymbol} + {formatUnitsTrim(resWbdagRaw, 18, 6)}{" "}
-                        {token2Meta?.symbol || "BDAG"}
+                        {formatUnitsTrim(resToken1Raw, token1Decimals, 6)} {token1Meta?.symbol || "\u2014"} +{" "}
+                        {formatUnitsTrim(resToken2Raw, token2Decimals, 6)} {token2Meta?.symbol || "\u2014"}
                       </>
                     )}
                   </span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
-                  Price: <span className="kv">{validBdagPair ? `1 BDAG ~ ${priceUsdcPerBdagText} ${quoteSymbol}` : "\u2014"}</span>
+                  Price:{" "}
+                  <span className="kv">
+                    {sameTokenSelected || bothNativeSelected
+                      ? "\u2014"
+                      : `1 ${token1Meta?.symbol || "token 1"} ~ ${price2Per1Text} ${token2Meta?.symbol || "token 2"}`}
+                  </span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
                   LP totalSupply: <span className="kv">{lpTotalText}</span>
@@ -1408,20 +1637,13 @@ export default function PoolPage() {
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={validBdagPair ? (token1IsNative ? addBdagDisplay : addUsdcDisplay) : ""}
+                          value={addAmt1Display}
                           onChange={(e) => {
-                            if (!validBdagPair) return;
-                            if (token1IsNative) {
-                              setAddLastEdited("bdag");
-                              setAddBdag(sanitizeAmountInput(e.target.value, 18));
-                            } else {
-                              setAddLastEdited("usdc");
-                              setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                            }
+                            setAddAmt1(sanitizeAmountInput(e.target.value, token1Decimals));
                           }}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
+                          disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected}
                         />
                       </div>
                     </div>
@@ -1434,20 +1656,13 @@ export default function PoolPage() {
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={validBdagPair ? (token2IsNative ? addBdagDisplay : addUsdcDisplay) : ""}
+                          value={addAmt2Display}
                           onChange={(e) => {
-                            if (!validBdagPair) return;
-                            if (token2IsNative) {
-                              setAddLastEdited("bdag");
-                              setAddBdag(sanitizeAmountInput(e.target.value, 18));
-                            } else {
-                              setAddLastEdited("usdc");
-                              setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                            }
+                            setAddAmt2(sanitizeAmountInput(e.target.value, token2Decimals));
                           }}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
+                          disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected}
                         />
                       </div>
                     </div>
@@ -1455,7 +1670,14 @@ export default function PoolPage() {
                     <button
                       type="button"
                       className="btn swapCta"
-                      disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr}
+                      disabled={
+                        !!pendingTx ||
+                        !isSupportedChain ||
+                        !dep?.router ||
+                        sameTokenSelected ||
+                        bothNativeSelected ||
+                        ((token1IsNative || token2IsNative) && !wrappedAddr)
+                      }
                       onClick={onAddLiquidity}
                     >
                       {pendingTx ? "Pending transaction..." : "Add Liquidity"}
@@ -1484,7 +1706,7 @@ export default function PoolPage() {
                           onChange={(e) => setRemoveLp(sanitizeAmountInput(e.target.value, 18))}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain}
+                          disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected}
                         />
                         <button
                           type="button"
@@ -1504,7 +1726,7 @@ export default function PoolPage() {
                     <button
                       type="button"
                       className="btn swapCta"
-                      disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !poolExists || userLpRaw <= 0n}
+                      disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected || !poolExists || userLpRaw <= 0n}
                       onClick={() => onRemoveLiquidity("")}
                     >
                       {pendingTx ? "Pending transaction..." : "Remove Liquidity"}
@@ -1529,17 +1751,49 @@ export default function PoolPage() {
                 const idShort = String(p.id || "").slice(-6).toUpperCase();
                 const ownerShort = p?.owner ? `${String(p.owner).slice(0, 6)}...${String(p.owner).slice(-4)}` : "-";
                 const poolPair = String(p?.pair || "");
-                const poolQuoteSymbol = String(p?.quoteSymbol || (poolPair.includes("/") ? poolPair.split("/")[1] : "") || "").trim();
-                const poolQuoteAddress = String(p?.quoteAddress || "").trim();
-                const poolQuoteToken =
-                  (poolQuoteAddress && selectableTokens.find((t) => t?.address && sameAddr(t.address, poolQuoteAddress))) ||
-                  (poolQuoteSymbol && selectableTokens.find((t) => t?.symbol === poolQuoteSymbol)) ||
+
+                const poolToken0Symbol = String(p?.token0Symbol || (poolPair.includes("/") ? poolPair.split("/")[0] : "") || "").trim();
+                const poolToken1Symbol = String(p?.token1Symbol || (poolPair.includes("/") ? poolPair.split("/")[1] : "") || "").trim();
+                const poolToken0Address = String(p?.token0Address || "").trim();
+                const poolToken1Address = String(p?.token1Address || "").trim();
+
+                const poolTok0 =
+                  (poolToken0Address && selectableTokens.find((t) => t?.address && sameAddr(t.address, poolToken0Address))) ||
+                  (poolToken0Symbol && selectableTokens.find((t) => t?.symbol === poolToken0Symbol)) ||
                   null;
-                const poolQuoteDecimals = Number(poolQuoteToken?.decimals ?? 18);
-                const poolQuoteLabel = poolQuoteToken?.symbol || poolQuoteSymbol || quoteSymbol || "token";
-                const poolMatchesSelected = !!poolPair && normalizePairKey(poolPair) === normalizePairKey(selectedPairKey);
-                const totalBdagText = formatUnitsTrim(safeBigInt(p?.totalBdagRaw), 18, 6);
-                const totalUsdcText = formatUnitsTrim(safeBigInt(p?.totalUsdcRaw), poolQuoteDecimals, 2);
+                const poolTok1 =
+                  (poolToken1Address && selectableTokens.find((t) => t?.address && sameAddr(t.address, poolToken1Address))) ||
+                  (poolToken1Symbol && selectableTokens.find((t) => t?.symbol === poolToken1Symbol)) ||
+                  null;
+
+                const poolTok0Label = poolTok0?.symbol || poolToken0Symbol || "token0";
+                const poolTok1Label = poolTok1?.symbol || poolToken1Symbol || "token1";
+                const poolTok0Decimals = poolTok0?.isNative ? 18 : Number(poolTok0?.decimals ?? 18);
+                const poolTok1Decimals = poolTok1?.isNative ? 18 : Number(poolTok1?.decimals ?? 18);
+
+                const poolMatchesSelected = (() => {
+                  if (!token1Addr || !token2Addr) return false;
+                  if (sameTokenSelected || bothNativeSelected) return false;
+
+                  const sa = resolveOnchainAddr(token1Addr, token1IsNative);
+                  const sb = resolveOnchainAddr(token2Addr, token2IsNative);
+                  if (!sa || !sb) return false;
+
+                  const pa = resolveOnchainAddr(poolToken0Address, poolToken0Address === "native");
+                  const pb = resolveOnchainAddr(poolToken1Address, poolToken1Address === "native");
+                  if (!pa || !pb) {
+                    const sel = normalizePairKey(selectedPairKey);
+                    const poolK = normalizePairKey(poolPair);
+                    if (!sel || !poolK) return false;
+                    const selRev = sel.includes("/") ? sel.split("/").reverse().join("/") : sel;
+                    return poolK === sel || poolK === selRev;
+                  }
+
+                  return (sameAddr(sa, pa) && sameAddr(sb, pb)) || (sameAddr(sa, pb) && sameAddr(sb, pa));
+                })();
+
+                const total0Text = formatUnitsTrim(safeBigInt(p?.total0Raw ?? p?.totalBdagRaw), poolTok0Decimals, 6);
+                const total1Text = formatUnitsTrim(safeBigInt(p?.total1Raw ?? p?.totalUsdcRaw), poolTok1Decimals, 6);
                 const poolUserLpRaw = safeBigInt(p?.userLpRaw);
                 const removableLpRaw = poolMatchesSelected ? (poolUserLpRaw < userLpRaw ? poolUserLpRaw : userLpRaw) : 0n;
                 const removableLpText = formatUnitsTrim(removableLpRaw, 18, 18);
@@ -1562,7 +1816,7 @@ export default function PoolPage() {
                     <div className="small" style={{ marginTop: 6 }}>
                       Activity: <span className="kv">{p.depositCount || 0}</span> - Total:{" "}
                       <span className="kv">
-                        {totalBdagText} BDAG + {totalUsdcText} {poolQuoteLabel}
+                        {total0Text} {poolTok0Label} + {total1Text} {poolTok1Label}
                       </span>
                     </div>
 
@@ -1581,20 +1835,20 @@ export default function PoolPage() {
                           <div className="swapBoxRow">
                               <input
                                 className="input swapAmountInput"
-                                value={validBdagPair ? (token1IsNative ? poolAddBdagDisplay : poolAddUsdcDisplay) : ""}
+                                value={poolAddAmt1Display}
                                 onChange={(e) => {
-                                  if (!validBdagPair) return;
-                                  if (token1IsNative) {
-                                    setPoolLastEdited("bdag");
-                                    setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
-                                  } else {
-                                    setPoolLastEdited("usdc");
-                                    setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                                  }
+                                  setPoolAddAmt1(sanitizeAmountInput(e.target.value, token1Decimals));
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || (!!poolPair && !poolMatchesSelected)}
+                                disabled={
+                                  !!pendingTx ||
+                                  !isSupportedChain ||
+                                  sameTokenSelected ||
+                                  bothNativeSelected ||
+                                  ((token1IsNative || token2IsNative) && !wrappedAddr) ||
+                                  !poolMatchesSelected
+                                }
                               />
                           </div>
                         </div>
@@ -1607,20 +1861,20 @@ export default function PoolPage() {
                           <div className="swapBoxRow">
                               <input
                                 className="input swapAmountInput"
-                                value={validBdagPair ? (token2IsNative ? poolAddBdagDisplay : poolAddUsdcDisplay) : ""}
+                                value={poolAddAmt2Display}
                                 onChange={(e) => {
-                                  if (!validBdagPair) return;
-                                  if (token2IsNative) {
-                                    setPoolLastEdited("bdag");
-                                    setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
-                                  } else {
-                                    setPoolLastEdited("usdc");
-                                    setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
-                                  }
+                                  setPoolAddAmt2(sanitizeAmountInput(e.target.value, token2Decimals));
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || (!!poolPair && !poolMatchesSelected)}
+                                disabled={
+                                  !!pendingTx ||
+                                  !isSupportedChain ||
+                                  sameTokenSelected ||
+                                  bothNativeSelected ||
+                                  ((token1IsNative || token2IsNative) && !wrappedAddr) ||
+                                  !poolMatchesSelected
+                                }
                               />
                             </div>
                         </div>
@@ -1628,8 +1882,16 @@ export default function PoolPage() {
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr || (!!poolPair && !poolMatchesSelected)}
-                          onClick={() => onDepositToPool(p.id, poolPair)}
+                          disabled={
+                            !!pendingTx ||
+                            !isSupportedChain ||
+                            !dep?.router ||
+                            sameTokenSelected ||
+                            bothNativeSelected ||
+                            ((token1IsNative || token2IsNative) && !wrappedAddr) ||
+                            !poolMatchesSelected
+                          }
+                          onClick={() => onDepositToPool(p)}
                         >
                           {pendingTx ? "Pending transaction..." : "Add Liquidity"}
                         </button>
@@ -1661,14 +1923,14 @@ export default function PoolPage() {
                               onChange={(e) => setRemoveLp(sanitizeAmountInput(e.target.value, 18))}
                               placeholder="0.0"
                               inputMode="decimal"
-                              disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
+                              disabled={!!pendingTx || !isSupportedChain || !poolMatchesSelected}
                             />
                             <button
                               type="button"
                               className="btn"
                               style={{ padding: "8px 10px", borderRadius: 10, whiteSpace: "nowrap" }}
                               onClick={() => setRemoveLp(removableLpText)}
-                              disabled={!!pendingTx || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
+                              disabled={!!pendingTx || removableLpRaw <= 0n || !poolMatchesSelected}
                             >
                               Max
                             </button>
@@ -1681,7 +1943,7 @@ export default function PoolPage() {
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !poolExists || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
+                          disabled={!!pendingTx || !isSupportedChain || sameTokenSelected || bothNativeSelected || !poolExists || removableLpRaw <= 0n || !poolMatchesSelected}
                           onClick={() => onRemoveLiquidity(p.id)}
                         >
                           {pendingTx ? "Pending transaction..." : "Remove Liquidity"}

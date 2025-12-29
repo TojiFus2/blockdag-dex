@@ -23,6 +23,17 @@
       "quoteSymbol": "USDC",
       "createdAtMs": 1766845991455,
       "createdAtIso": "2025-12-27T14:33:11.455Z"
+    },
+    {
+      "id": "pool_1767006696732_8e6c2e94",
+      "chainId": 1043,
+      "owner": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "name": "",
+      "pair": "TST/WUSDC",
+      "baseSymbol": "TST",
+      "quoteSymbol": "WUSDC",
+      "createdAtMs": 1767006696732,
+      "createdAtIso": "2025-12-29T11:11:36.732Z"
     }
   ],
   "deposits": [
@@ -73,6 +84,30 @@
       "txHash": "0x543ef42b3a8d77335e265285538c7ee9e2df307cd42a9eea6782233579d732e5",
       "createdAtMs": 1766846019510,
       "createdAtIso": "2025-12-27T14:33:39.510Z"
+    },
+    {
+      "id": "dep_1767006696740_1501bf14",
+      "poolId": "pool_1767006696732_8e6c2e94",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "kind": "deposit",
+      "bdagRaw": "100000000000000000000",
+      "usdcRaw": "100000000",
+      "lpRaw": "99999999999000",
+      "txHash": "0x4ec7b649b895a7312090211191449a89298948d29c15edf58d405fc1d682fe6e",
+      "createdAtMs": 1767006696740,
+      "createdAtIso": "2025-12-29T11:11:36.740Z"
+    },
+    {
+      "id": "wd_1767006731598_1018ab16",
+      "poolId": "pool_1767006696732_8e6c2e94",
+      "wallet": "0x52328804e9f1ecfa5d0ccd5a54a32fcc5b8bad85",
+      "kind": "withdraw",
+      "bdagRaw": "99999999999000000000",
+      "usdcRaw": "99999999",
+      "lpRaw": "99999999999000",
+      "txHash": "0xe6e19470f2fec13124eda249bf8f37f2e13a8d3a032619895f4c22d8ed76ae87",
+      "createdAtMs": 1767006731598,
+      "createdAtIso": "2025-12-29T11:12:11.598Z"
     }
   ]
 }

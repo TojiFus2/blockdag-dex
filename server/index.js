@@ -137,8 +137,12 @@ const server = http.createServer(async (req, res) => {
       const baseSymbol = String(body?.baseSymbol || "");
       const quoteSymbol = String(body?.quoteSymbol || "");
       const quoteAddress = String(body?.quoteAddress || "");
+      const token0Symbol = String(body?.token0Symbol || "");
+      const token1Symbol = String(body?.token1Symbol || "");
+      const token0Address = String(body?.token0Address || "");
+      const token1Address = String(body?.token1Address || "");
 
-      const pool = createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress });
+      const pool = createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress, token0Symbol, token1Symbol, token0Address, token1Address });
       sendJson(req, res, 200, { ok: true, pool });
       return;
     }
@@ -162,10 +166,12 @@ const server = http.createServer(async (req, res) => {
       const wallet = String(body?.wallet || "");
       const bdagRaw = String(body?.bdagRaw || "");
       const usdcRaw = String(body?.usdcRaw || "");
+      const amount0Raw = String(body?.amount0Raw || "");
+      const amount1Raw = String(body?.amount1Raw || "");
       const lpRaw = String(body?.lpRaw || "");
       const txHash = String(body?.txHash || "");
 
-      const dep = addDeposit({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash });
+      const dep = addDeposit({ poolId, wallet, bdagRaw, usdcRaw, amount0Raw, amount1Raw, lpRaw, txHash });
       sendJson(req, res, 200, { ok: true, deposit: dep });
       return;
     }
@@ -177,10 +183,12 @@ const server = http.createServer(async (req, res) => {
       const wallet = String(body?.wallet || "");
       const bdagRaw = String(body?.bdagRaw || "");
       const usdcRaw = String(body?.usdcRaw || "");
+      const amount0Raw = String(body?.amount0Raw || "");
+      const amount1Raw = String(body?.amount1Raw || "");
       const lpRaw = String(body?.lpRaw || "");
       const txHash = String(body?.txHash || "");
 
-      const wd = addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash });
+      const wd = addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, amount0Raw, amount1Raw, lpRaw, txHash });
       sendJson(req, res, 200, { ok: true, withdrawal: wd });
       return;
     }

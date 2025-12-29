@@ -5,6 +5,7 @@ import logo from "./assets/logo.png";
 import { loadDeployments } from "./lib/deployments";
 import { ensureSupportedNetwork, getBrowserProvider, requestAccounts, hasInjected } from "./lib/eth";
 import { BackgroundFX } from "./components/BackgroundFX";
+import ErrorBoundary from "./components/ErrorBoundary";
 import SwapPage from "./pages/SwapPage";
 import PoolPage from "./pages/PoolPage";
 import FaucetPage from "./pages/FaucetPage";
@@ -127,12 +128,27 @@ export default function App() {
       <Routes>
         <Route
           path="/"
-          element={<SwapPage account={account} chainId={chainId} dep={dep} pendingTx={pendingTx} setPendingTx={setPendingTx} />}
+          element={
+            <ErrorBoundary>
+              <SwapPage account={account} chainId={chainId} dep={dep} pendingTx={pendingTx} setPendingTx={setPendingTx} />
+            </ErrorBoundary>
+          }
         />
-        <Route path="/pool" element={<PoolPage />} />
+        <Route
+          path="/pool"
+          element={
+            <ErrorBoundary>
+              <PoolPage />
+            </ErrorBoundary>
+          }
+        />
         <Route
           path="/faucet"
-          element={<FaucetPage account={account} chainId={chainId} dep={dep} pendingTx={pendingTx} statusFromApp={status} />}
+          element={
+            <ErrorBoundary>
+              <FaucetPage account={account} chainId={chainId} dep={dep} pendingTx={pendingTx} statusFromApp={status} />
+            </ErrorBoundary>
+          }
         />
       </Routes>
 
