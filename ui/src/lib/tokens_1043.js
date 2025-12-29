@@ -3,6 +3,14 @@
 
 export const TOKENS_1043 = [
   {
+    symbol: "BDAG",
+    name: "BlockDAG",
+    address: "native",
+    decimals: 18,
+    isNative: true,
+    isWrapped: false,
+  },
+  {
     symbol: "WBDAG",
     name: "Wrapped BDAG",
     address: "0xC97B4e92fB267bB11b1CD2d475F9E8c16b433289",

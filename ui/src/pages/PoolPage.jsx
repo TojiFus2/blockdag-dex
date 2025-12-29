@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
+import TokenSelectModal from "../components/TokenSelectModal";
 
 import { loadDeployments } from "../lib/deployments";
 import { getBrowserProvider, hasInjected, requestAccounts } from "../lib/eth";
@@ -23,11 +24,15 @@ const PAIR_ABI = [
 ];
 
 const ERC20_ABI = [
+  "function symbol() external view returns (string)",
+  "function name() external view returns (string)",
   "function decimals() external view returns (uint8)",
   "function balanceOf(address owner) external view returns (uint256)",
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function approve(address spender, uint256 value) external returns (bool)",
 ];
+
+const WETH_ABI = ["function withdraw(uint256) external"];
 
 const ROUTER_ABI = [
   "function WETH() external view returns (address)",
@@ -51,6 +56,56 @@ function toErr(e) {
 function sameAddr(a, b) {
   if (!a || !b) return false;
   return String(a).toLowerCase() === String(b).toLowerCase();
+}
+
+function shortAddr(a) {
+  const s = String(a || "");
+  if (s.length <= 12) return s;
+  return `${s.slice(0, 6)}...${s.slice(-4)}`;
+}
+
+function getImportedTokensKey(chainId) {
+  const id = Number(chainId);
+  return `dex.importedTokens.${Number.isFinite(id) ? id : "unknown"}`;
+}
+
+function safeParseJson(raw, fallback) {
+  try {
+    const v = JSON.parse(raw);
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeImportedTokens(list) {
+  const out = [];
+  const seen = new Set();
+  for (const t of Array.isArray(list) ? list : []) {
+    const addr = String(t?.address || "").trim();
+    if (!addr) continue;
+    if (!ethers.isAddress(addr)) continue;
+    const lower = addr.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+
+    out.push({
+      symbol: String(t?.symbol || "").trim().slice(0, 16) || shortAddr(addr),
+      name: String(t?.name || "").trim().slice(0, 64) || String(t?.symbol || "").trim().slice(0, 16) || shortAddr(addr),
+      address: addr,
+      decimals: Number.isFinite(Number(t?.decimals)) ? Number(t.decimals) : 18,
+      isWrapped: false,
+      isNative: false,
+      imported: true,
+    });
+  }
+  return out;
+}
+
+function normalizePairKey(pair) {
+  const raw = String(pair || "").trim();
+  if (!raw) return "";
+  return raw.replace(/^WBDAG\\//i, "BDAG/").toLowerCase();
 }
 
 function isZeroAddr(a) {
@@ -230,36 +285,88 @@ export default function PoolPage() {
 
   const walletOk = hasInjected();
 
-  const quoteOptions = useMemo(() => {
-    const list = TOKENS_1043 || [];
-    return list.filter((x) => x && (x.symbol === "WUSDC" || x.symbol === "WUSDT") && x.address);
-  }, []);
-
-  const [selectedQuoteSymbol, setSelectedQuoteSymbol] = useState(() => {
-    const list = TOKENS_1043 || [];
-    const hasWusdt = list.some((x) => x && x.symbol === "WUSDT" && x.address);
-    return hasWusdt ? "WUSDT" : "WUSDC";
-  });
+  const [importedTokens, setImportedTokens] = useState([]);
 
   useEffect(() => {
-    if (!quoteOptions.length) return;
-    const ok = quoteOptions.some((t) => t && t.symbol === selectedQuoteSymbol);
-    if (!ok) setSelectedQuoteSymbol(quoteOptions[0].symbol);
-  }, [quoteOptions, selectedQuoteSymbol]);
+    const id = chainId || CHAIN_ID;
+    try {
+      const key = getImportedTokensKey(id);
+      const raw = localStorage.getItem(key);
+      setImportedTokens(normalizeImportedTokens(safeParseJson(raw || "[]", [])));
+    } catch {
+      setImportedTokens([]);
+    }
+  }, [chainId]);
+
+  const defaultNativeAddr = useMemo(() => TOKENS_1043.find((t) => t?.isNative)?.address || "native", []);
+  const defaultQuoteAddr = useMemo(() => {
+    return (
+      TOKENS_1043.find((t) => t?.symbol === "WUSDT")?.address ||
+      TOKENS_1043.find((t) => t?.symbol === "WUSDC")?.address ||
+      TOKENS_1043.find((t) => !t?.isWrapped && !t?.isNative)?.address ||
+      ""
+    );
+  }, []);
+
+  const [token1Addr, setToken1Addr] = useState(defaultNativeAddr);
+  const [token2Addr, setToken2Addr] = useState(defaultQuoteAddr);
+
+  const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
+  const [tokenModalTarget, setTokenModalTarget] = useState(null); // 't1'|'t2'|null
+  const [tokenSearchQuery, setTokenSearchQuery] = useState("");
+
+  const selectableTokens = useMemo(() => {
+    const merged = [...(TOKENS_1043 || []), ...(importedTokens || [])];
+    const uniq = [];
+    const seen = new Set();
+    for (const t of merged) {
+      if (!t) continue;
+      if (t.isWrapped) continue; // pick BDAG instead
+      const addr = String(t.address || "").trim();
+      if (!addr) continue;
+      const lower = addr.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      uniq.push(t);
+    }
+    return uniq;
+  }, [importedTokens]);
+
+  const tokenMetaByAddr = useMemo(() => {
+    const map = new Map();
+    for (const t of selectableTokens) map.set(String(t.address).toLowerCase(), t);
+    return map;
+  }, [selectableTokens]);
+
+  function getTokenMeta(addr) {
+    if (!addr) return null;
+    const lower = String(addr).toLowerCase();
+    const t = tokenMetaByAddr.get(lower);
+    if (t) return t;
+    return { symbol: shortAddr(addr), name: shortAddr(addr), address: addr, decimals: 18, isWrapped: false, isNative: false };
+  }
+
+  const token1Meta = useMemo(() => getTokenMeta(token1Addr), [token1Addr, tokenMetaByAddr]);
+  const token2Meta = useMemo(() => getTokenMeta(token2Addr), [token2Addr, tokenMetaByAddr]);
+
+  const token1IsNative = !!token1Meta?.isNative;
+  const token2IsNative = !!token2Meta?.isNative;
+  const validBdagPair = token1IsNative !== token2IsNative;
 
   const quoteToken = useMemo(() => {
-    const list = TOKENS_1043 || [];
-    const t = list.find((x) => x.symbol === selectedQuoteSymbol) || list.find((x) => x.symbol === "WUSDC");
-    return t || null;
-  }, [selectedQuoteSymbol]);
+    if (!validBdagPair) return null;
+    return token1IsNative ? token2Meta : token1Meta;
+  }, [validBdagPair, token1IsNative, token1Meta, token2Meta]);
 
   const wusdcAddr = useMemo(() => {
-    if (!quoteToken?.address) return null;
-    return quoteToken.address;
+    const addr = String(quoteToken?.address || "").trim();
+    if (!addr) return null;
+    if (!ethers.isAddress(addr)) return null;
+    return addr;
   }, [quoteToken]);
 
-  const quoteSymbol = useMemo(() => quoteToken?.symbol || "WUSDC", [quoteToken]);
-  const selectedPairKey = useMemo(() => `WBDAG/${quoteSymbol}`, [quoteSymbol]);
+  const quoteSymbol = useMemo(() => quoteToken?.symbol || "", [quoteToken]);
+  const selectedPairKey = useMemo(() => (quoteSymbol ? `BDAG/${quoteSymbol}` : ""), [quoteSymbol]);
 
   const isSupportedChain = chainId === CHAIN_ID;
 
@@ -268,6 +375,84 @@ export default function PoolPage() {
     if (!quoteToken) return;
     setWusdcDecimals(Number(quoteToken.decimals ?? 6));
   }, [quoteToken]);
+
+  function closeTokenModal() {
+    setIsTokenModalOpen(false);
+    setTokenModalTarget(null);
+    setTokenSearchQuery("");
+  }
+
+  function openTokenModal(target) {
+    if (pendingTx) return;
+    setTokenModalTarget(target);
+    setTokenSearchQuery("");
+    setIsTokenModalOpen(true);
+  }
+
+  function setTokenFromModal(t) {
+    if (!t) return;
+    if (pendingTx) return;
+    const nextAddr = String(t.address || "");
+
+    if (tokenModalTarget === "t1" && token2Addr && sameAddr(nextAddr, token2Addr)) {
+      setPageError("Select two different tokens");
+      closeTokenModal();
+      return;
+    }
+    if (tokenModalTarget === "t2" && token1Addr && sameAddr(nextAddr, token1Addr)) {
+      setPageError("Select two different tokens");
+      closeTokenModal();
+      return;
+    }
+
+    if (tokenModalTarget === "t1") setToken1Addr(nextAddr);
+    if (tokenModalTarget === "t2") setToken2Addr(nextAddr);
+    closeTokenModal();
+  }
+
+  async function importTokenByAddress(addr) {
+    const a = String(addr || "").trim();
+    if (!ethers.isAddress(a)) throw new Error("Invalid address");
+
+    const existing = selectableTokens.find((t) => t?.address && sameAddr(t.address, a));
+    if (existing) return existing;
+
+    const provider = await getBrowserProvider();
+    const c = new ethers.Contract(a, ERC20_ABI, provider);
+
+    let symbol = "";
+    let name = "";
+    let decimals = 18;
+
+    try {
+      symbol = String(await c.symbol()).trim();
+    } catch {}
+    try {
+      name = String(await c.name()).trim();
+    } catch {}
+    try {
+      decimals = Number(await c.decimals());
+    } catch {}
+
+    const token = {
+      symbol: symbol.slice(0, 16) || shortAddr(a),
+      name: (name || symbol || shortAddr(a)).slice(0, 64),
+      address: a,
+      decimals: Number.isFinite(decimals) ? decimals : 18,
+      isWrapped: false,
+      isNative: false,
+      imported: true,
+    };
+
+    const next = normalizeImportedTokens([...(importedTokens || []), token]);
+    setImportedTokens(next);
+    try {
+      const id = chainId || CHAIN_ID;
+      localStorage.setItem(getImportedTokensKey(id), JSON.stringify(next));
+    } catch {}
+
+    return token;
+  }
 
   async function refreshBase() {
     if (!walletOk) {
@@ -448,7 +633,7 @@ export default function PoolPage() {
 
   const poolExists = !!pairAddr && !isZeroAddr(pairAddr);
   const reservesNonZero = resWbdagRaw > 0n && resUsdcRaw > 0n;
-  const isAutoQuote = poolExists && reservesNonZero;
+  const isAutoQuote = false;
 
   const addBdagInputRaw = useMemo(() => parseUnitsSafe(addBdag, 18) ?? 0n, [addBdag]);
   const addUsdcInputRaw = useMemo(() => parseUnitsSafe(addUsdc, wusdcDecimals) ?? 0n, [addUsdc, wusdcDecimals]);
@@ -595,8 +780,12 @@ export default function PoolPage() {
       setCreatePoolError("Connect wallet");
       return;
     }
-    if (!isAutoQuote) {
-      setCreatePoolError("Pool ratio not available yet (seed the main pool first)");
+    if (!validBdagPair) {
+      setCreatePoolError("Select BDAG + token (only ETH pools supported)");
+      return;
+    }
+    if (!wusdcAddr) {
+      setCreatePoolError("Select a token");
       return;
     }
 
@@ -629,7 +818,7 @@ export default function PoolPage() {
       const res = await fetch(`${base}/api/pools`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: account, pair: selectedPairKey, baseSymbol: "BDAG", quoteSymbol }),
+        body: JSON.stringify({ owner: account, pair: selectedPairKey, baseSymbol: "BDAG", quoteSymbol, quoteAddress: wusdcAddr }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
@@ -681,11 +870,11 @@ export default function PoolPage() {
       return null;
     }
     if (!wrappedAddr) {
-      setError("WBDAG not loaded");
+      setError("Wrapped token not loaded");
       return null;
     }
     if (!wusdcAddr) {
-      setError(`${quoteSymbol} not configured`);
+      setError("Select BDAG + token");
       return null;
     }
 
@@ -694,7 +883,7 @@ export default function PoolPage() {
       return null;
     }
     if (usdcRaw <= 0n) {
-      setError("Enter USDC amount");
+      setError(`Enter ${(quoteSymbol || "token").trim()} amount`);
       return null;
     }
 
@@ -704,13 +893,13 @@ export default function PoolPage() {
       const provider = await getBrowserProvider();
       const signer = await provider.getSigner();
       const router = new ethers.Contract(dep.router, ROUTER_ABI, signer);
-      const usdc = new ethers.Contract(wusdcAddr, ERC20_ABI, signer);
+      const token = new ethers.Contract(wusdcAddr, ERC20_ABI, signer);
 
       setStatus("Checking allowance...");
-      const allowance = await retryView(() => usdc.allowance(account, dep.router)).catch(() => 0n);
+      const allowance = await retryView(() => token.allowance(account, dep.router)).catch(() => 0n);
       if (allowance < usdcRaw) {
-        setStatus("Approving USDC...");
-        const txA = await usdc.approve(dep.router, usdcRaw, { gasLimit: GAS.APPROVE });
+        setStatus(`Approving ${quoteSymbol || "token"}...`);
+        const txA = await token.approve(dep.router, usdcRaw, { gasLimit: GAS.APPROVE });
         setPendingTx(txA.hash);
         setTx(txA.hash);
         setStatus(`Approve pending: ${txA.hash}`);
@@ -786,12 +975,16 @@ export default function PoolPage() {
       setPoolDepositError("Open a pool");
       return;
     }
-    if (poolPair && String(poolPair).toLowerCase() !== String(selectedPairKey).toLowerCase()) {
+    if (poolPair && normalizePairKey(poolPair) !== normalizePairKey(selectedPairKey)) {
       setPoolDepositError(`This pool is ${poolPair}. Switch pair to match before adding liquidity.`);
       return;
     }
-    if (!isAutoQuote) {
-      setPoolDepositError("Pool ratio not available yet (seed the main pool first)");
+    if (!validBdagPair) {
+      setPoolDepositError("Select BDAG + token (only ETH pools supported)");
+      return;
+    }
+    if (!wusdcAddr) {
+      setPoolDepositError("Select a token");
       return;
     }
 
@@ -859,7 +1052,7 @@ export default function PoolPage() {
     if (recordPoolId) {
       const rec = (pools || []).find((x) => x && x.id === recordPoolId);
       const recPair = String(rec?.pair || "");
-      if (recPair && recPair.toLowerCase() !== String(selectedPairKey).toLowerCase()) {
+      if (recPair && normalizePairKey(recPair) !== normalizePairKey(selectedPairKey)) {
         return setRemoveError(`This pool is ${recPair}. Switch pair to match before removing liquidity.`);
       }
       const poolUserLpRaw = safeBigInt(rec?.userLpRaw);
@@ -918,34 +1111,50 @@ export default function PoolPage() {
         }
       } catch {}
 
-      if (recordPoolId && (amount0 > 0n || amount1 > 0n)) {
-        try {
-          let bdagOut = 0n;
-          let usdcOut = 0n;
-          if (sameAddr(t0, wrappedAddr) && sameAddr(t1, wusdcAddr)) {
-            bdagOut = amount0;
-            usdcOut = amount1;
-          } else if (sameAddr(t1, wrappedAddr) && sameAddr(t0, wusdcAddr)) {
-            bdagOut = amount1;
-            usdcOut = amount0;
-          }
+      let bdagOut = 0n;
+      let usdcOut = 0n;
+      if (sameAddr(t0, wrappedAddr) && sameAddr(t1, wusdcAddr)) {
+        bdagOut = amount0;
+        usdcOut = amount1;
+      } else if (sameAddr(t1, wrappedAddr) && sameAddr(t0, wusdcAddr)) {
+        bdagOut = amount1;
+        usdcOut = amount0;
+      }
 
-          if (bdagOut > 0n || usdcOut > 0n) {
-            setRemoveStatus("Recording withdrawal...");
-            const base = getApiBase();
-            await fetch(`${base}/api/pools/${encodeURIComponent(recordPoolId)}/withdrawals`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                wallet: account,
-                bdagRaw: bdagOut.toString(),
-                usdcRaw: usdcOut.toString(),
-                lpRaw: lpRaw.toString(),
-                txHash: tx2.hash,
-              }),
-            });
-            await refreshPools();
-          }
+      // Convert WBDAG -> BDAG so the user gets native back (router-lite doesn't have removeLiquidityETH).
+      if (validBdagPair && bdagOut > 0n && wrappedAddr && !isZeroAddr(wrappedAddr)) {
+        try {
+          const weth = new ethers.Contract(wrappedAddr, WETH_ABI, signer);
+          setRemoveStatus("Unwrapping BDAG...");
+          const txW = await weth.withdraw(bdagOut, { gasLimit: GAS.REMOVE });
+          setPendingTx(txW.hash);
+          setRemoveTx(txW.hash);
+          setRemoveStatus(`Pending: ${txW.hash}`);
+          const rcW = await txW.wait();
+          setPendingTx("");
+          if (rcW?.status !== 1) throw new Error("Unwrap failed");
+        } catch (e) {
+          setPendingTx("");
+          setRemoveError(`Unwrap failed (you received WBDAG): ${toErr(e)}`);
+        }
+      }
+
+      if (recordPoolId && (bdagOut > 0n || usdcOut > 0n)) {
+        try {
+          setRemoveStatus("Recording withdrawal...");
+          const base = getApiBase();
+          await fetch(`${base}/api/pools/${encodeURIComponent(recordPoolId)}/withdrawals`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              wallet: account,
+              bdagRaw: bdagOut.toString(),
+              usdcRaw: usdcOut.toString(),
+              lpRaw: lpRaw.toString(),
+              txHash: tx2.hash,
+            }),
+          });
+          await refreshPools();
         } catch {}
       }
 
@@ -995,90 +1204,121 @@ export default function PoolPage() {
               <div className="cardHeader swapHeader">
                 <div>
                   <div className="title">Create pool</div>
-                  <div className="sub">{`BDAG/${quoteSymbol}`}</div>
+                  <div className="sub">{`${token1Meta?.symbol || "\u2014"}/${token2Meta?.symbol || "\u2014"}`}</div>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <select
-                    className="select"
-                    value={selectedQuoteSymbol}
-                    onChange={(e) => {
-                      if (pendingTx) return;
-                      setSelectedQuoteSymbol(e.target.value);
-                    }}
-                    disabled={!!pendingTx || !quoteOptions.length}
-                    style={{ padding: "8px 10px", borderRadius: 10 }}
-                    aria-label="Select main pair"
-                    title="Select main pair"
+                  <button
+                    type="button"
+                    className="swapTokenPill swapTokenPillBtn"
+                    onClick={() => openTokenModal("t1")}
+                    disabled={!!pendingTx}
+                    title="Select token 1"
+                    aria-label="Select token 1"
                   >
-                    {quoteOptions.map((t) => (
-                      <option key={t.symbol} value={t.symbol}>
-                        {`BDAG/${t.symbol}`}
-                      </option>
-                    ))}
-                  </select>
+                    {token1Meta?.symbol || "\u2014"}
+                  </button>
+                  <button
+                    type="button"
+                    className="swapTokenPill swapTokenPillBtn"
+                    onClick={() => openTokenModal("t2")}
+                    disabled={!!pendingTx}
+                    title="Select token 2"
+                    aria-label="Select token 2"
+                  >
+                    {token2Meta?.symbol || "\u2014"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "8px 10px", borderRadius: 10, whiteSpace: "nowrap" }}
+                    onClick={() => {
+                      if (pendingTx) return;
+                      const a = token1Addr;
+                      setToken1Addr(token2Addr);
+                      setToken2Addr(a);
+                    }}
+                    disabled={!!pendingTx}
+                    title="Flip tokens"
+                    aria-label="Flip tokens"
+                  >
+                    {"\u2194"}
+                  </button>
                 </div>
               </div>
 
               <div className="swapBox">
                 <div className="swapBoxHead">
-                   <div className="swapBoxTitle">Create pool</div>
-                   <div className="swapTokenPill">{`BDAG/${quoteSymbol}`}</div>
+                  <div className="swapBoxTitle">Create pool</div>
+                  <div className="swapTokenPill">{selectedPairKey || "\u2014"}</div>
                  </div>
-                 <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                   Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}.
-                 </div>
-               </div>
+                {!validBdagPair ? (
+                  <div className="small bad" style={{ marginTop: 8, opacity: 0.95 }}>
+                    Only pools with BDAG + a token are supported.
+                  </div>
+                ) : (
+                  <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+                    Choose the amounts for both tokens. The router may use less and refund the excess to match the pool ratio.
+                  </div>
+                )}
+              </div>
 
               <div className="swapBox" style={{ marginTop: 12 }}>
                 <div className="swapBoxHead">
-                  <div className="swapBoxTitle">BDAG amount</div>
-                  <div className="swapTokenPill">BDAG</div>
+                  <div className="swapBoxTitle">{`${token1Meta?.symbol || "\u2014"} amount`}</div>
+                  <div className="swapTokenPill">{token1Meta?.symbol || "\u2014"}</div>
                 </div>
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={createBdagDisplay}
+                    value={validBdagPair ? (token1IsNative ? createBdagDisplay : createUsdcDisplay) : ""}
                     onChange={(e) => {
-                      setCreateLastEdited("bdag");
-                      setCreateBdag(sanitizeAmountInput(e.target.value, 18));
+                      if (!validBdagPair) return;
+                      if (token1IsNative) {
+                        setCreateLastEdited("bdag");
+                        setCreateBdag(sanitizeAmountInput(e.target.value, 18));
+                      } else {
+                        setCreateLastEdited("usdc");
+                        setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                      }
                     }}
                     placeholder="0.0"
                     inputMode="decimal"
-                    disabled={!!pendingTx || !isSupportedChain}
+                    disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
                   />
                 </div>
               </div>
 
               <div className="swapBox" style={{ marginTop: 12 }}>
                 <div className="swapBoxHead">
-                  <div className="swapBoxTitle">{`${quoteSymbol} amount`}</div>
-                  <div className="swapTokenPill">{quoteSymbol}</div>
+                  <div className="swapBoxTitle">{`${token2Meta?.symbol || "\u2014"} amount`}</div>
+                  <div className="swapTokenPill">{token2Meta?.symbol || "\u2014"}</div>
                 </div>
                 <div className="swapBoxRow">
                   <input
                     className="input swapAmountInput"
-                    value={createUsdcDisplay}
+                    value={validBdagPair ? (token2IsNative ? createBdagDisplay : createUsdcDisplay) : ""}
                     onChange={(e) => {
-                      setCreateLastEdited("usdc");
-                      setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                      if (!validBdagPair) return;
+                      if (token2IsNative) {
+                        setCreateLastEdited("bdag");
+                        setCreateBdag(sanitizeAmountInput(e.target.value, 18));
+                      } else {
+                        setCreateLastEdited("usdc");
+                        setCreateUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                      }
                     }}
                     placeholder="0.0"
                     inputMode="decimal"
-                    disabled={!!pendingTx || !isSupportedChain}
+                    disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
                   />
                 </div>
-                {isAutoQuote && (
-                  <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                    Other side is auto-calculated from reserves.
-                  </div>
-                )}
               </div>
 
               <button
                 type="button"
                 className="btn swapCta"
-                disabled={!!pendingTx || !isSupportedChain || !isAutoQuote || !dep?.router || !wusdcAddr}
+                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr}
                 onClick={onCreatePoolWithDeposit}
               >
                 {pendingTx ? "Pending transaction..." : "Create pool"}
@@ -1133,11 +1373,23 @@ export default function PoolPage() {
                 <div className="small" style={{ marginTop: 6 }}>
                   Reserves:{" "}
                   <span className="kv">
-                    {formatUnitsTrim(resWbdagRaw, 18, 6)} BDAG + {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)} {quoteSymbol}
+                    {!validBdagPair ? (
+                      "\u2014"
+                    ) : token1IsNative ? (
+                      <>
+                        {formatUnitsTrim(resWbdagRaw, 18, 6)} {token1Meta?.symbol || "BDAG"} + {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)}{" "}
+                        {token2Meta?.symbol || quoteSymbol}
+                      </>
+                    ) : (
+                      <>
+                        {formatUnitsTrim(resUsdcRaw, wusdcDecimals, 2)} {token1Meta?.symbol || quoteSymbol} + {formatUnitsTrim(resWbdagRaw, 18, 6)}{" "}
+                        {token2Meta?.symbol || "BDAG"}
+                      </>
+                    )}
                   </span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
-                  Price: <span className="kv">1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}</span>
+                  Price: <span className="kv">{validBdagPair ? `1 BDAG ~ ${priceUsdcPerBdagText} ${quoteSymbol}` : "\u2014"}</span>
                 </div>
                 <div className="small" style={{ marginTop: 6 }}>
                   LP totalSupply: <span className="kv">{lpTotalText}</span>
@@ -1150,53 +1402,60 @@ export default function PoolPage() {
                   <>
                     <div className="swapBox" style={{ marginTop: 12 }}>
                       <div className="swapBoxHead">
-                        <div className="swapBoxTitle">BDAG amount</div>
-                        <div className="swapTokenPill">BDAG</div>
+                        <div className="swapBoxTitle">{`${token1Meta?.symbol || "\u2014"} amount`}</div>
+                        <div className="swapTokenPill">{token1Meta?.symbol || "\u2014"}</div>
                       </div>
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={addBdagDisplay}
+                          value={validBdagPair ? (token1IsNative ? addBdagDisplay : addUsdcDisplay) : ""}
                           onChange={(e) => {
-                            setAddLastEdited("bdag");
-                            setAddBdag(sanitizeAmountInput(e.target.value, 18));
+                            if (!validBdagPair) return;
+                            if (token1IsNative) {
+                              setAddLastEdited("bdag");
+                              setAddBdag(sanitizeAmountInput(e.target.value, 18));
+                            } else {
+                              setAddLastEdited("usdc");
+                              setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                            }
                           }}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain}
+                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
                         />
                       </div>
                     </div>
 
                     <div className="swapBox" style={{ marginTop: 12 }}>
                       <div className="swapBoxHead">
-                        <div className="swapBoxTitle">{`${quoteSymbol} amount`}</div>
-                        <div className="swapTokenPill">{quoteSymbol}</div>
+                        <div className="swapBoxTitle">{`${token2Meta?.symbol || "\u2014"} amount`}</div>
+                        <div className="swapTokenPill">{token2Meta?.symbol || "\u2014"}</div>
                       </div>
                       <div className="swapBoxRow">
                         <input
                           className="input swapAmountInput"
-                          value={addUsdcDisplay}
+                          value={validBdagPair ? (token2IsNative ? addBdagDisplay : addUsdcDisplay) : ""}
                           onChange={(e) => {
-                            setAddLastEdited("usdc");
-                            setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                            if (!validBdagPair) return;
+                            if (token2IsNative) {
+                              setAddLastEdited("bdag");
+                              setAddBdag(sanitizeAmountInput(e.target.value, 18));
+                            } else {
+                              setAddLastEdited("usdc");
+                              setAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                            }
                           }}
                           placeholder="0.0"
                           inputMode="decimal"
-                          disabled={!!pendingTx || !isSupportedChain}
+                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair}
                         />
                       </div>
-                      {isAutoQuote && (
-                        <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                          Other side is auto-calculated from reserves.
-                        </div>
-                      )}
                     </div>
 
                     <button
                       type="button"
                       className="btn swapCta"
-                      disabled={!!pendingTx || !isSupportedChain || !dep?.router || !wusdcAddr}
+                      disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr}
                       onClick={onAddLiquidity}
                     >
                       {pendingTx ? "Pending transaction..." : "Add Liquidity"}
@@ -1245,7 +1504,7 @@ export default function PoolPage() {
                     <button
                       type="button"
                       className="btn swapCta"
-                      disabled={!!pendingTx || !isSupportedChain || !poolExists || userLpRaw <= 0n}
+                      disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !poolExists || userLpRaw <= 0n}
                       onClick={() => onRemoveLiquidity("")}
                     >
                       {pendingTx ? "Pending transaction..." : "Remove Liquidity"}
@@ -1270,11 +1529,15 @@ export default function PoolPage() {
                 const idShort = String(p.id || "").slice(-6).toUpperCase();
                 const ownerShort = p?.owner ? `${String(p.owner).slice(0, 6)}...${String(p.owner).slice(-4)}` : "-";
                 const poolPair = String(p?.pair || "");
-                const poolQuoteSymbol = poolPair.includes("/") ? poolPair.split("/")[1] : "";
-                const poolQuoteToken = (TOKENS_1043 || []).find((t) => t && t.symbol === poolQuoteSymbol);
-                const poolQuoteDecimals = Number(poolQuoteToken?.decimals ?? wusdcDecimals ?? 6);
-                const poolQuoteLabel = poolQuoteSymbol || quoteSymbol;
-                const poolMatchesSelected = !!poolPair && poolPair.toLowerCase() === String(selectedPairKey).toLowerCase();
+                const poolQuoteSymbol = String(p?.quoteSymbol || (poolPair.includes("/") ? poolPair.split("/")[1] : "") || "").trim();
+                const poolQuoteAddress = String(p?.quoteAddress || "").trim();
+                const poolQuoteToken =
+                  (poolQuoteAddress && selectableTokens.find((t) => t?.address && sameAddr(t.address, poolQuoteAddress))) ||
+                  (poolQuoteSymbol && selectableTokens.find((t) => t?.symbol === poolQuoteSymbol)) ||
+                  null;
+                const poolQuoteDecimals = Number(poolQuoteToken?.decimals ?? 18);
+                const poolQuoteLabel = poolQuoteToken?.symbol || poolQuoteSymbol || quoteSymbol || "token";
+                const poolMatchesSelected = !!poolPair && normalizePairKey(poolPair) === normalizePairKey(selectedPairKey);
                 const totalBdagText = formatUnitsTrim(safeBigInt(p?.totalBdagRaw), 18, 6);
                 const totalUsdcText = formatUnitsTrim(safeBigInt(p?.totalUsdcRaw), poolQuoteDecimals, 2);
                 const poolUserLpRaw = safeBigInt(p?.userLpRaw);
@@ -1307,58 +1570,65 @@ export default function PoolPage() {
                       <>
                         {!poolMatchesSelected && !!poolPair && (
                           <div className="swapStatus bad" style={{ marginTop: 10 }}>
-                            This pool uses {poolPair}. Switch main pair selector to match to manage liquidity.
+                            This pool uses {poolPair}. Switch token 1 / token 2 to match to manage liquidity.
                           </div>
                         )}
                         <div className="swapBox" style={{ marginTop: 12 }}>
                           <div className="swapBoxHead">
-                            <div className="swapBoxTitle">BDAG amount</div>
-                            <div className="swapTokenPill">BDAG</div>
+                            <div className="swapBoxTitle">{`${token1Meta?.symbol || "\u2014"} amount`}</div>
+                            <div className="swapTokenPill">{token1Meta?.symbol || "\u2014"}</div>
                           </div>
                           <div className="swapBoxRow">
                               <input
                                 className="input swapAmountInput"
-                                value={poolAddBdagDisplay}
+                                value={validBdagPair ? (token1IsNative ? poolAddBdagDisplay : poolAddUsdcDisplay) : ""}
                                 onChange={(e) => {
-                                  setPoolLastEdited("bdag");
-                                  setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
+                                  if (!validBdagPair) return;
+                                  if (token1IsNative) {
+                                    setPoolLastEdited("bdag");
+                                    setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
+                                  } else {
+                                    setPoolLastEdited("usdc");
+                                    setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                                  }
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
+                                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || (!!poolPair && !poolMatchesSelected)}
                               />
                           </div>
                         </div>
 
                         <div className="swapBox" style={{ marginTop: 12 }}>
                           <div className="swapBoxHead">
-                            <div className="swapBoxTitle">{`${poolQuoteLabel} amount`}</div>
-                            <div className="swapTokenPill">{poolQuoteLabel}</div>
+                            <div className="swapBoxTitle">{`${token2Meta?.symbol || "\u2014"} amount`}</div>
+                            <div className="swapTokenPill">{token2Meta?.symbol || "\u2014"}</div>
                           </div>
                           <div className="swapBoxRow">
                               <input
                                 className="input swapAmountInput"
-                                value={poolAddUsdcDisplay}
+                                value={validBdagPair ? (token2IsNative ? poolAddBdagDisplay : poolAddUsdcDisplay) : ""}
                                 onChange={(e) => {
-                                  setPoolLastEdited("usdc");
-                                  setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                                  if (!validBdagPair) return;
+                                  if (token2IsNative) {
+                                    setPoolLastEdited("bdag");
+                                    setPoolAddBdag(sanitizeAmountInput(e.target.value, 18));
+                                  } else {
+                                    setPoolLastEdited("usdc");
+                                    setPoolAddUsdc(sanitizeAmountInput(e.target.value, wusdcDecimals));
+                                  }
                                 }}
                                 placeholder="0.0"
                                 inputMode="decimal"
-                                disabled={!!pendingTx || !isSupportedChain || (!!poolPair && !poolMatchesSelected)}
+                                disabled={!!pendingTx || !isSupportedChain || !validBdagPair || (!!poolPair && !poolMatchesSelected)}
                               />
                             </div>
-                            {isAutoQuote && (
-                              <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-                                Ratio is taken from the main pool: 1 BDAG ~ {priceUsdcPerBdagText} {quoteSymbol}.
-                              </div>
-                            )}
                         </div>
 
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !isAutoQuote || !dep?.router || !wusdcAddr || (!!poolPair && !poolMatchesSelected)}
+                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !dep?.router || !wusdcAddr || (!!poolPair && !poolMatchesSelected)}
                           onClick={() => onDepositToPool(p.id, poolPair)}
                         >
                           {pendingTx ? "Pending transaction..." : "Add Liquidity"}
@@ -1411,7 +1681,7 @@ export default function PoolPage() {
                         <button
                           type="button"
                           className="btn swapCta"
-                          disabled={!!pendingTx || !isSupportedChain || !poolExists || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
+                          disabled={!!pendingTx || !isSupportedChain || !validBdagPair || !poolExists || removableLpRaw <= 0n || (!!poolPair && !poolMatchesSelected)}
                           onClick={() => onRemoveLiquidity(p.id)}
                         >
                           {pendingTx ? "Pending transaction..." : "Remove Liquidity"}
@@ -1436,6 +1706,17 @@ export default function PoolPage() {
           </>
         )}
       </div>
+
+      <TokenSelectModal
+        open={isTokenModalOpen}
+        tokens={selectableTokens}
+        searchQuery={tokenSearchQuery}
+        onSearchQueryChange={setTokenSearchQuery}
+        onSelectToken={setTokenFromModal}
+        onImportAddress={importTokenByAddress}
+        onClose={closeTokenModal}
+        balancesByAddress={{}}
+      />
     </div>
   );
 }

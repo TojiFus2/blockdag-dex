@@ -20,6 +20,7 @@ const PAIR_ABI = [
 
 const ERC20_ABI = [
   "function symbol() external view returns (string)",
+  "function name() external view returns (string)",
   "function decimals() external view returns (uint8)",
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function approve(address spender, uint256 value) external returns (bool)",
@@ -128,6 +129,43 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function getImportedTokensKey(chainId) {
+  const id = Number(chainId);
+  return `dex.importedTokens.${Number.isFinite(id) ? id : "unknown"}`;
+}
+
+function safeParseJson(raw, fallback) {
+  try {
+    const v = JSON.parse(raw);
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeImportedTokens(list) {
+  const out = [];
+  const seen = new Set();
+  for (const t of Array.isArray(list) ? list : []) {
+    const addr = String(t?.address || "").trim();
+    if (!addr) continue;
+    const lower = addr.toLowerCase();
+    if (!ethers.isAddress(addr)) continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push({
+      symbol: String(t?.symbol || "").trim().slice(0, 16) || shortAddr(addr),
+      name: String(t?.name || "").trim().slice(0, 64) || String(t?.symbol || "").trim().slice(0, 16) || shortAddr(addr),
+      address: addr,
+      decimals: Number.isFinite(Number(t?.decimals)) ? Number(t.decimals) : 18,
+      isWrapped: false,
+      isNative: false,
+      imported: true,
+    });
+  }
+  return out;
+}
+
 function isZeroAddr(a) {
   return !a || a.toLowerCase() === "0x0000000000000000000000000000000000000000";
 }
@@ -228,6 +266,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
   // Modal balances (best-effort)
   const [balancesByAddr, setBalancesByAddr] = useState({});
   const [localTokens, setLocalTokens] = useState([]);
+  const [importedTokens, setImportedTokens] = useState([]);
 
   const [routeRefreshNonce, setRouteRefreshNonce] = useState(0);
 
@@ -249,10 +288,32 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
 
   const deadlineMinutes = 10;
 
+  useEffect(() => {
+    try {
+      const key = getImportedTokensKey(chainId);
+      const raw = localStorage.getItem(key);
+      setImportedTokens(normalizeImportedTokens(safeParseJson(raw || "[]", [])));
+    } catch {
+      setImportedTokens([]);
+    }
+  }, [chainId]);
+
   const tokenList = useMemo(() => {
-    if (chainId === 1043) return TOKENS_1043;
-    return localTokens;
-  }, [chainId, localTokens]);
+    const base = chainId === 1043 ? TOKENS_1043 : localTokens;
+    const merged = [...(base || []), ...(importedTokens || [])];
+    const uniq = [];
+    const seen = new Set();
+    for (const t of merged) {
+      if (!t) continue;
+      const addr = String(t.address || "").trim();
+      if (!addr) continue;
+      const lower = addr.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      uniq.push(t);
+    }
+    return uniq;
+  }, [chainId, localTokens, importedTokens]);
 
   const modalTokens = useMemo(() => {
     if (!tokenList?.length) return [];
@@ -264,7 +325,14 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
       list[wrappedIndex] = { ...list[wrappedIndex], address: wrappedAddr };
     }
 
-    return list;
+    // Always expose a native token option (mapped to router.WETH()/wrappedAddr under the hood).
+    const hasNative = list.some((t) => t?.isNative);
+    if (!hasNative) {
+      list.unshift({ symbol: "ETH", name: "Native", address: "native", decimals: 18, isWrapped: false, isNative: true });
+    }
+
+    // Hide wrapped token from the picker (users should pick native BDAG instead).
+    return list.filter((t) => !t?.isWrapped);
   }, [tokenList, wrappedAddr]);
 
   const tokenMetaByAddr = useMemo(() => {
@@ -279,9 +347,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     const lower = String(addr).toLowerCase();
     const t = tokenMetaByAddr.get(lower);
     if (t) {
-      // Treat wrapped native (router.WETH()/WBDAG) as the "native" side for ETH-style swaps.
-      const isNative = !!t.isNative || (!!wrappedAddr && sameAddr(t.address, wrappedAddr));
-      return { ...t, isNative };
+      return { ...t, isNative: !!t.isNative };
     }
 
     // Unknown token fallback (assume ERC20-like with 18 decimals, not native)
@@ -349,6 +415,49 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     closeTokenModal();
   }
 
+  async function importTokenByAddress(addr) {
+    const a = String(addr || "").trim();
+    if (!ethers.isAddress(a)) throw new Error("Invalid address");
+
+    const existing = (tokenList || []).find((t) => t?.address && sameAddr(t.address, a));
+    if (existing) return existing;
+
+    const provider = await getBrowserProvider();
+    const c = new ethers.Contract(a, ERC20_ABI, provider);
+
+    let symbol = "";
+    let name = "";
+    let decimals = 18;
+
+    try {
+      symbol = String(await retryView(() => c.symbol())).trim();
+    } catch {}
+    try {
+      name = String(await c.name()).trim();
+    } catch {}
+    try {
+      decimals = Number(await retryView(() => c.decimals()));
+    } catch {}
+
+    const token = {
+      symbol: symbol.slice(0, 16) || shortAddr(a),
+      name: (name || symbol || shortAddr(a)).slice(0, 64),
+      address: a,
+      decimals: Number.isFinite(decimals) ? decimals : 18,
+      isWrapped: false,
+      isNative: false,
+      imported: true,
+    };
+
+    const next = normalizeImportedTokens([...(importedTokens || []), token]);
+    setImportedTokens(next);
+    try {
+      localStorage.setItem(getImportedTokensKey(chainId), JSON.stringify(next));
+    } catch {}
+
+    return token;
+  }
+
   useEffect(() => {
     if (!dep?.router) return;
     (async () => {
@@ -364,23 +473,24 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
     })();
   }, [dep?.router]);
 
-  // Default selection (testnet): default sell=wrapped(BDAG), buy=WUSDT (fallback WUSDC).
+  // Default selection (testnet): default sell=BDAG, buy=WUSDT (fallback WUSDC).
   useEffect(() => {
     if (chainId !== 1043) return;
     if (!wrappedAddr) return;
 
+    const defNativeAddr = TOKENS_1043.find((t) => t.symbol === "BDAG")?.address || "native";
     const defOther =
       TOKENS_1043.find((t) => t.symbol === "WUSDT") ||
       TOKENS_1043.find((t) => t.symbol === "WUSDC") ||
-      TOKENS_1043.find((t) => !t.isWrapped);
+      TOKENS_1043.find((t) => !t.isWrapped && !t.isNative);
     const defOtherAddr = defOther?.address || "";
 
-    if (!tokenInAddr) setTokenInAddr(wrappedAddr);
+    if (!tokenInAddr) setTokenInAddr(defNativeAddr);
     if (!tokenOutAddr) setTokenOutAddr(defOtherAddr);
 
     if (!tokenInAddr || !tokenOutAddr) return;
     if (sameAddr(tokenInAddr, tokenOutAddr)) {
-      const alt = TOKENS_1043.find((t) => !t.isWrapped && !sameAddr(t.address, tokenInAddr));
+      const alt = TOKENS_1043.find((t) => !t.isWrapped && !sameAddr(t.address, tokenInAddr) && !t.isNative);
       if (alt) setTokenOutAddr(alt.address);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1463,6 +1573,7 @@ export default function SwapPage({ account, chainId, dep, pendingTx, setPendingT
         searchQuery={tokenSearchQuery}
         onSearchQueryChange={setTokenSearchQuery}
         onSelectToken={setTokenFromModal}
+        onImportAddress={importTokenByAddress}
         onClose={closeTokenModal}
         balancesByAddress={balancesByAddr}
       />

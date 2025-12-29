@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ethers } from "ethers";
 
 function shortAddr(a) {
   if (!a) return "";
@@ -14,15 +15,22 @@ export default function TokenSelectModal({
   searchQuery,
   onSearchQueryChange,
   onSelectToken,
+  onImportAddress,
   onClose,
 }) {
   const searchRef = useRef(null);
+  const [importStatus, setImportStatus] = useState({ state: "idle", error: "" }); // idle|loading|error
 
   useEffect(() => {
     if (!open) return;
     const t = setTimeout(() => searchRef.current?.focus?.(), 0);
     return () => clearTimeout(t);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setImportStatus({ state: "idle", error: "" });
+  }, [open, searchQuery]);
 
   useEffect(() => {
     if (!open) return;
@@ -42,6 +50,16 @@ export default function TokenSelectModal({
       return sym.includes(q) || addr.includes(q);
     });
   }, [tokens, searchQuery]);
+
+  const importCandidate = useMemo(() => {
+    const raw = String(searchQuery || "").trim();
+    if (!raw) return null;
+    if (!ethers.isAddress(raw)) return null;
+    const lower = raw.toLowerCase();
+    const exists = (tokens || []).some((t) => String(t?.address || "").toLowerCase() === lower);
+    if (exists) return null;
+    return raw;
+  }, [searchQuery, tokens]);
 
   if (!open) return null;
 
@@ -80,6 +98,41 @@ export default function TokenSelectModal({
         />
 
         <div className="tokenModalList" role="list">
+          {!!importCandidate && typeof onImportAddress === "function" && (
+            <>
+              <button
+                type="button"
+                className="tokenRow"
+                onClick={async () => {
+                  if (importStatus.state === "loading") return;
+                  setImportStatus({ state: "loading", error: "" });
+                  try {
+                    const t = await onImportAddress(importCandidate);
+                    if (!t) throw new Error("Token not found");
+                    setImportStatus({ state: "idle", error: "" });
+                    onSelectToken?.(t);
+                  } catch (e) {
+                    setImportStatus({ state: "error", error: e?.message || String(e) });
+                  }
+                }}
+                title={`Import ${importCandidate}`}
+              >
+                <span className="tokenRowIcon" aria-hidden="true" />
+                <span className="tokenRowMain">
+                  <span className="tokenRowSymbol">{importStatus.state === "loading" ? "Importing..." : "Import token"}</span>
+                  <span className="tokenRowSub">{shortAddr(importCandidate)}</span>
+                </span>
+                <span className="tokenRowBal" />
+                <span className="tokenRowAddr">{shortAddr(importCandidate)}</span>
+              </button>
+              {importStatus.state === "error" && (
+                <div className="small bad" style={{ padding: "8px 2px 0", opacity: 0.95 }}>
+                  {importStatus.error}
+                </div>
+              )}
+            </>
+          )}
+
           {filtered.length === 0 ? (
             <div className="small" style={{ opacity: 0.85, padding: "10px 2px" }}>
               No results

@@ -134,7 +134,7 @@ function getPool(poolId) {
   return { chainId: CHAIN_ID, pool: { ...pool, ...sumDepositsForPool(store.deposits, poolId) }, deposits };
 }
 
-function createPool({ owner, name, pair, baseSymbol, quoteSymbol }) {
+function createPool({ owner, name, pair, baseSymbol, quoteSymbol, quoteAddress }) {
   if (!ethers.isAddress(owner || "")) throw new Error("Invalid owner address");
 
   const store = readStore();
@@ -145,10 +145,12 @@ function createPool({ owner, name, pair, baseSymbol, quoteSymbol }) {
   const cleanPair = String(pair || "").trim().slice(0, 32);
   const cleanBase = String(baseSymbol || "").trim().slice(0, 16);
   const cleanQuote = String(quoteSymbol || "").trim().slice(0, 16);
+  const cleanQuoteAddr = String(quoteAddress || "").trim();
+  const finalQuoteAddress = ethers.isAddress(cleanQuoteAddr) ? cleanQuoteAddr : "";
 
   const finalBase = cleanBase || "BDAG";
   const finalQuote = cleanQuote || "WUSDC";
-  const finalPair = cleanPair || `WBDAG/${finalQuote}`;
+  const finalPair = cleanPair || `BDAG/${finalQuote}`;
 
   const pool = {
     id,
@@ -158,6 +160,7 @@ function createPool({ owner, name, pair, baseSymbol, quoteSymbol }) {
     pair: finalPair,
     baseSymbol: finalBase,
     quoteSymbol: finalQuote,
+    quoteAddress: finalQuoteAddress,
     createdAtMs: ts,
     createdAtIso: new Date(ts).toISOString(),
   };
@@ -176,7 +179,7 @@ function addDeposit({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
   const u = BigInt(usdcRaw || "0");
   const lp = BigInt(lpRaw || "0");
   if (b <= 0n) throw new Error("Invalid BDAG amount");
-  if (u <= 0n) throw new Error("Invalid USDC amount");
+  if (u <= 0n) throw new Error("Invalid token amount");
   if (lp <= 0n) throw new Error("Invalid LP amount");
 
   if (txHash) {
@@ -218,7 +221,7 @@ function addWithdrawal({ poolId, wallet, bdagRaw, usdcRaw, lpRaw, txHash }) {
   const u = BigInt(usdcRaw || "0");
   const lp = BigInt(lpRaw || "0");
   if (b < 0n) throw new Error("Invalid BDAG amount");
-  if (u < 0n) throw new Error("Invalid USDC amount");
+  if (u < 0n) throw new Error("Invalid token amount");
   if (b === 0n && u === 0n) throw new Error("Invalid withdrawal amount");
   if (lp <= 0n) throw new Error("Invalid LP amount");
 
