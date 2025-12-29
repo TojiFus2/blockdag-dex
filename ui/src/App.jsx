@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import logo from "./assets/logo.png";
 
 import { loadDeployments } from "./lib/deployments";
@@ -8,7 +8,6 @@ import { BackgroundFX } from "./components/BackgroundFX";
 import ErrorBoundary from "./components/ErrorBoundary";
 import SwapPage from "./pages/SwapPage";
 import PoolPage from "./pages/PoolPage";
-import FaucetPage from "./pages/FaucetPage";
 
 function shortAddr(a) {
   if (!a) return "";
@@ -98,7 +97,6 @@ export default function App() {
           <div className="navLinks">
             <Link to="/">SWAP</Link>
             <Link to="/pool">POOL</Link>
-            <Link to="/faucet">FAUCET</Link>
           </div>
 
           <div className="navRight">
@@ -142,14 +140,7 @@ export default function App() {
             </ErrorBoundary>
           }
         />
-        <Route
-          path="/faucet"
-          element={
-            <ErrorBoundary>
-              <FaucetPage account={account} chainId={chainId} dep={dep} pendingTx={pendingTx} statusFromApp={status} />
-            </ErrorBoundary>
-          }
-        />
+        <Route path="/faucet" element={<Navigate to="/" replace />} />
       </Routes>
 
       <footer className="footer">
