@@ -7,6 +7,8 @@
   /* Background vertical shift for landing image.
      Negative = move image up, positive = move image down. */
   --landing-bg-shift: -180px;
+  /* Keep legacy anchoring for consistent framing across viewports. */
+  --landing-bg-y: calc(-100% + var(--landing-bg-shift));
   /* Hero vertical shift (negative = up, positive = down). */
   --landing-hero-shift: -44px;
 }
@@ -15,11 +17,19 @@ html.route-landing,
 body.route-landing {
   background: #000 !important;
   background-color: #000 !important;
-  background-image: url("/landing6.png") !important;
-  background-repeat: no-repeat !important;
-  background-position: center calc(-100% + var(--landing-bg-shift)) !important;
-  background-size: cover !important;
-  background-attachment: fixed !important;
+}
+
+body.route-landing::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: #000;
+  background-image: url("/landing6.png");
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: 50% var(--landing-bg-y);
+  pointer-events: none;
 }
 
 .landingRoot {

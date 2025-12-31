@@ -49,7 +49,8 @@
   --shadow-glass: 0 0 0 1px rgb(255 255 255 / 0.06), 0 26px 90px rgb(0 0 0 / 0.82);
 
   /* DEX route background (swap/pool) */
-  --dex-bg-y: 50%;
+  --dex-bg-shift: 0px;
+  --dex-bg-y: calc(50% + var(--dex-bg-shift));
 
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   color: rgb(var(--text-primary-rgb) / 0.96);
@@ -72,7 +73,7 @@ body {
     radial-gradient(980px 560px at 88% 18%, rgb(var(--prism-deep-rgb) / 0.12), transparent 64%),
     repeating-linear-gradient(180deg, rgb(255 255 255 / 0.035) 0px, transparent 2px, transparent 6px),
     linear-gradient(180deg, rgb(0 0 0 / 0.3) 0%, rgb(0 0 0 / 0.3) 100%),
-    url("/background_bdagdex.jpg");
+    url("/background_bdagdex.png");
   background-repeat: no-repeat, no-repeat, no-repeat, repeat, no-repeat, no-repeat;
   background-size: auto, auto, auto, auto, cover, cover;
   background-position: center, center, center, center, center, center 35%;
@@ -86,12 +87,20 @@ body {
 
 html.route-dex,
 body.route-dex {
-  background-color: #000 !important;
-  background-image: url("/landing2.png") !important;
-  background-repeat: no-repeat !important;
-  background-size: cover !important;
-  background-position: center var(--dex-bg-y) !important;
-  background-attachment: fixed !important;
+  background: #000 !important;
+}
+
+body.route-dex::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: #000;
+  background-image: url("/background_bdagdex.png");
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: 50% var(--dex-bg-y);
+  pointer-events: none;
 }
 
 a {
